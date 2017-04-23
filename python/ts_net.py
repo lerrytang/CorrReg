@@ -4,6 +4,7 @@ from keras.layers import Input, Conv1D, Dense, Flatten, Lambda, Reshape, MaxPool
 from keras.models import Model
 from keras.losses import binary_crossentropy
 from sklearn import metrics
+import util
 import pandas as pd
 import numpy as np
 import os
@@ -13,23 +14,16 @@ logger = logging.getLogger(__name__)
 
 class TsNet:
 
-    def __init__(self, args, train_mean, train_std,
-            train_data, train_label, valid_data, valid_label):
+    def __init__(self, args, train_mean, train_std, num_channel):
 
         self.win_size = args.win_size
         self.batch_size = args.batch_size
         self.max_epochs = args.max_epochs
         self.corr_coef_pp = args.corr_coef_pp
-        self.log_n_iter = args.log_n_iter
-
+        self.test_data_dir = os.path.join(args.data_dir, args.target_obj)
         self.train_mean = train_mean
         self.train_std = train_std
-        self.train_data = train_data
-        self.train_label = train_label
-        self.valid_data = valid_data
-        self.valid_label= valid_label
-        self.num_channel = train_data.shape[-1]
-
+        self.num_channel = num_channel
         self.should_stop = False
 
     def build_model(self):
@@ -80,7 +74,8 @@ class TsNet:
         corr_layer = Lambda(corr_pp, name="corr_pp")
         for i, conv_param in enumerate(conv_params):
             num_filter, filter_size, pool_size = conv_param
-            conv_layer = Conv1D(num_filter, filter_size, activation="relu", padding="same", name="conv" + str(i+1))
+            conv_layer = Conv1D(num_filter, filter_size,
+                    activation="relu", padding="same", name="conv" + str(i+1))
             maxpool_layer = MaxPooling1D(pool_size=pool_size, strides=pool_size)
             x_all_data = conv_layer(x_all_data)
             x_pos_data1 = conv_layer(x_pos_data1)
@@ -118,10 +113,7 @@ class TsNet:
         pos_label_idx = np.where(labels==1)[0]
         num_pos_samples = np.sum(labels==1)
         num_neg_samples = np.sum(labels==0)
-        if 1.0 * num_neg_samples / num_pos_samples > 2:
-            pos_sampling_weight = num_neg_samples / (num_pos_samples * 2.0)
-        else:
-            pos_sampling_weight = 1.0
+        pos_sampling_weight = 1.0 * num_neg_samples / num_pos_samples
         logger.info("pos_sampling_weight={}".format(
             pos_sampling_weight))
         sampling_weights = np.ones(data_size)
@@ -150,7 +142,8 @@ class TsNet:
                     [batch_label]*self.num_outputs)
         logger.info("data_fetcher abort") 
 
-    def train(self, logdir, modelpath, verbose=0):
+    def train(self, train_data, train_label, valid_data, valid_label,
+            logdir, modelpath, verbose=0):
 
         def get_steps(data):
             samples_per_epoch = np.prod(data.shape[:-1])
@@ -158,17 +151,15 @@ class TsNet:
             steps_per_epoch =  samples_per_epoch / samples_per_batch
             return steps_per_epoch
 
-        steps_per_epoch = get_steps(self.train_data)
-        validation_steps = 2 * get_steps(self.valid_data)
+        steps_per_epoch = get_steps(train_data)
+        validation_steps = 2 * get_steps(valid_data)
         logger.info("max_epochs={}, steps_per_epoch={}, validation_steps={}".format(
             self.max_epochs, steps_per_epoch, validation_steps))
 
         train_hist = self.model.fit_generator(
-            generator=self.get_rand_batch(
-                self.train_data, self.train_label),
+            generator=self.get_rand_batch(train_data, train_label),
             steps_per_epoch=steps_per_epoch,
-            validation_data=self.get_rand_batch(
-                self.valid_data, self.valid_label),
+            validation_data=self.get_rand_batch(valid_data, valid_label),
             validation_steps=validation_steps,
             callbacks=[
                 keras.callbacks.EarlyStopping(monitor='val_prob_loss',
@@ -191,14 +182,16 @@ class TsNet:
 
         return train_hist
 
-    def test_on_data(self, test_data):
+    def test_on_data(self, test_data_files, ts_len, num_channel):
         """Test model performance on the test set""" 
-        test_size, ts_len, num_channel = test_data.shape
-        preds = np.zeros(test_size)
+        preds = np.zeros(test_data_files.size)
         num_pred_per_ts = 600
         stride = int((ts_len - self.win_size) / (num_pred_per_ts - 1))
         
-        for i in xrange(test_size):
+        for i, f in enumerate(test_data_files):
+            test_data, _, _, _, _ = \
+                    util.load_data(os.path.join(self.test_data_dir, f), "test")
+            test_data = np.transpose(test_data, axes=[1, 0])
             preds_per_ts = np.zeros(num_pred_per_ts)
             offset = 0
             remaining_num = num_pred_per_ts
@@ -210,7 +203,7 @@ class TsNet:
                 end_idx = start_idx + self.win_size
                 slice_idx = np.array([np.arange(start_idx[k], end_idx[k])
                     for k in xrange(test_batch_size)])
-                batch_data = test_data[i, slice_idx]
+                batch_data = test_data[slice_idx]
                 # get test scores
                 probs = self.get_prob([batch_data])[0].flatten()
                 preds_per_ts[offset:(offset+test_batch_size)] =\

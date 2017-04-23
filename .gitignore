@@ -1,5 +1,6 @@
 log
 log_*
+train_mean_std_dir
 data
 img
 python/*.pyc

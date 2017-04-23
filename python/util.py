@@ -35,7 +35,7 @@ def load_data(filename, datatype):
     #extract data from .mat file
     logger.info("filename={}".format(filename))
     raw_data = scipy.io.loadmat(filename, chars_as_strings=True)
-    seq_idx = int(filename.split(".")[0].split("_")[-1])
+    seq_idx = int(os.path.basename(filename).split(".")[0].split("_")[-1])
     field_name = datatype + "_segment_" + str(seq_idx)
     matdata= raw_data[field_name].flatten()
     # load each field
@@ -97,11 +97,11 @@ def load_train_data(target_data_dir):
     return data, labels
 
 
-def split_to_folds(data, labels, n_folds=2):
+def split_to_folds(labels, n_folds=2):
     train_sets = []
     valid_sets = []
     skf = StratifiedKFold(labels, n_folds, shuffle=True)
     for train_ix, valid_ix in skf:
-        train_sets.append((data[train_ix], labels[train_ix]))
-        valid_sets.append((data[valid_ix], labels[valid_ix]))
+        train_sets.append(train_ix)
+        valid_sets.append(valid_ix)
     return train_sets, valid_sets

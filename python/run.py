@@ -1,10 +1,11 @@
 import pickle
 import util
-import ts_net
+from ts_net import TsNet
 import argparse
 import time
 import pandas as pd
 import numpy as np
+import gc
 import os
 import logging
 logging.basicConfig(level=logging.INFO,
@@ -22,33 +23,46 @@ def merge_results(logdir):
         else:
             res = res + tmp
     res /= len(output_files)
-    res.to_csv(os.path.join(logdir, "csv_to_submit.csv"))
+    res.to_csv(os.path.join(logdir, "csv_to_submit.csv"), header=False)
+    return res
 
 
 def main(args):
     logdir, modeldir = util.create_log(args.logdir, args.target_obj)
+
     # load data for training
     target_data_dir = os.path.join(args.data_dir, args.target_obj)
     logger.info("target_data_dir={}".format(target_data_dir))
     data, labels = util.load_train_data(target_data_dir)
-    train_sets, valid_sets = util.split_to_folds(data, labels, args.n_folds)
+    train_ix, valid_ix = util.split_to_folds(labels, args.n_folds)
+    num_seq, seq_len, num_ch = data.shape
+    logger.info("num_seq={}, seq_len={}, num_ch={}".format(
+        num_seq, seq_len, num_ch))
+
+    # load mean and std
+    npzfile_path = os.path.join(args.train_mean_std_dir,
+            args.target_obj, "train_mean_std.npz")
+    logger.info("npzfile_path={}".format(npzfile_path))
+    npzfile = np.load(npzfile_path)
+    train_mean = npzfile["train_mean"]
+    train_std = npzfile["train_std"]
+
     # CV
-    for fold_i in xrange(args.n_fold):
+    for fold_i in xrange(args.n_folds):
         logger.info("<fold {}>".format(fold_i))
         logger.info("---------------")
 
-        # calculate mean and std
-        train_data, train_labels = train_sets[fold_i]
-        valid_data, valid_labels = valid_sets[fold_i]
-        num_channel = train_data.shape[-1]
-        tmp = train_data.reshape([-1, num_channel])
-        train_mean = np.mean(tmp, axis=0)
-        train_std = np.std(tmp, axis=0)
+        # split data
+        train_indice = train_ix[fold_i]
+        train_data, train_labels = data[train_indice], labels[train_indice]
+        valid_indice = valid_ix[fold_i]
+        valid_data, valid_labels = data[valid_indice], labels[valid_indice]
+        logger.info("train_data.shape={}".format(train_data.shape))
+        logger.info("valid_data.shape={}".format(valid_data.shape))
         
         # build net
         logger.info("Build model")
-        model = TsNet(args, train_mean, train_std,
-                train_data, train_labels, valid_data, valid_labels)
+        model = TsNet(args, train_mean, train_std, num_ch)
         model.build_model()
         model.build_func()
 
@@ -56,7 +70,8 @@ def main(args):
         logger.info("Start to train")
         modelname = "bestmodel_fold" + str(fold_i) + ".h5"
         modelpath = os.path.join(logdir, "model", modelname)
-        train_hist = model.train(logdir, modelpath)
+        train_hist = model.train(train_data, train_labels,
+                valid_data, valid_labels, logdir, modelpath)
 
         # log training history
         hist_file = os.path.join(logdir, "hist_fold"+str(fold_i)+".pkl")
@@ -65,16 +80,15 @@ def main(args):
             
         # load test data
         del train_data, train_labels, valid_data, valid_labels
+        gc.collect()
         data_files = os.listdir(target_data_dir)
         test_data_files = np.sort([f for f in data_files if "test" in f])
         logger.info("#test_files = {}".format(test_data_files.size))
-        test_data = util.load_all_data(target_data_dir, "test")
-        logger.info("test_data.shape={}".format(test_data.shape))
 
         # test
         logger.info("Load model to test")
         model.model.load_weights(os.path.join(logdir, "model", modelname))
-        preds = model.test_on_data(test_data)
+        preds = model.test_on_data(test_data_files, seq_len, num_ch)
         output = pd.Series(preds, index=test_data_files)
         output_file = os.path.join(logdir, "output_fold"+str(fold_i)+".csv")
         output.to_csv(output_file)
@@ -85,15 +99,19 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--data_dir", default="../data",
+            help="directory of data")
     parser.add_argument("--logdir", default="./log",
             help="directory to store logs")
+    parser.add_argument("--train_mean_std_dir", default="../train_mean_std_dir",
+            help="directory of train_mean_std.npz")
     parser.add_argument("--corr_coef_pp", default=0.0, type=float,
             help="coefficient for triplet loss (positive and positive")
     parser.add_argument("--win_size", default=8000, type=int,
             help="size of sliding window")
     parser.add_argument("--batch_size", default=32, type=int,
             help="training batch size")
-    parser.add_argument("--max_epochs", default=20, type=int,
+    parser.add_argument("--max_epochs", default=50, type=int,
             help="maximum number of training iterations")
     parser.add_argument("--n_folds", default=3, type=int,
             help="training batch size")
