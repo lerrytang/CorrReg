@@ -6,14 +6,9 @@ from keras.losses import binary_crossentropy
 from sklearn import metrics
 import pandas as pd
 import numpy as np
-import threading
 import os
 import logging
 logger = logging.getLogger(__name__)
-
-
-NUM_FETCHER = 4
-MAX_Q_SIZE = 16
 
 
 class TsNet:
@@ -118,25 +113,20 @@ class TsNet:
         self.get_prob = K.function([self.model.layers[0].input],
                 [self.model.layers[14].output])
 
-    def fetch_batch_data(self, data, labels):
-
-        data_size = data.shape[0]
-        seq_length = data.shape[1]
+    def get_rand_batch(self, data, labels):
+        data_size, seq_len, _ = data.shape
         pos_label_idx = np.where(labels==1)[0]
-        
         num_pos_samples = np.sum(labels==1)
         num_neg_samples = np.sum(labels==0)
         if 1.0 * num_neg_samples / num_pos_samples > 2:
             pos_sampling_weight = num_neg_samples / (num_pos_samples * 2.0)
         else:
             pos_sampling_weight = 1.0
+        logger.info("pos_sampling_weight={}".format(
+            pos_sampling_weight))
         sampling_weights = np.ones(data_size)
         sampling_weights[labels==1] *= pos_sampling_weight
         sampling_weights /= np.sum(sampling_weights)
-        logger.info("num_pos_samples={}, num_neg_samples={}".format(
-            num_pos_samples, num_neg_samples))
-        logger.info("class_sampling_weights={}".format(
-            [1.0, pos_sampling_weight]))
 
         logger.info("data_fetcher off to work")
         while not self.should_stop:
@@ -148,7 +138,7 @@ class TsNet:
                     np.random.choice(pos_label_idx, self.batch_size), -1)
             pos_idx2 = np.expand_dims(
                     np.random.choice(pos_label_idx, self.batch_size), -1)
-            rand_start = np.random.randint(0, seq_length - self.win_size,
+            rand_start = np.random.randint(0, seq_len - self.win_size,
                     self.batch_size)
             rand_end = rand_start + self.win_size
             seq_slice = np.array([np.arange(rand_start[i], rand_end[i])
@@ -160,7 +150,7 @@ class TsNet:
                     [batch_label]*self.num_outputs)
         logger.info("data_fetcher abort") 
 
-    def train(self, logdir, modelpath):
+    def train(self, logdir, modelpath, verbose=0):
 
         def get_steps(data):
             samples_per_epoch = np.prod(data.shape[:-1])
@@ -169,29 +159,32 @@ class TsNet:
             return steps_per_epoch
 
         steps_per_epoch = get_steps(self.train_data)
-        validation_steps = get_steps(self.valid_data)
+        validation_steps = 2 * get_steps(self.valid_data)
         logger.info("max_epochs={}, steps_per_epoch={}, validation_steps={}".format(
             self.max_epochs, steps_per_epoch, validation_steps))
 
         train_hist = self.model.fit_generator(
-            generator=self.fetch_batch_data(
+            generator=self.get_rand_batch(
                 self.train_data, self.train_label),
             steps_per_epoch=steps_per_epoch,
-            validation_data=self.fetch_batch_data(
+            validation_data=self.get_rand_batch(
                 self.valid_data, self.valid_label),
             validation_steps=validation_steps,
             callbacks=[
-                keras.callbacks.EarlyStopping(monitor='val_loss',
-                    min_delta=0.001, patience=3, verbose=0, mode='min'),
+                keras.callbacks.EarlyStopping(monitor='val_prob_loss',
+                    min_delta=0.001,
+                    patience=3,
+                    verbose=1,
+                    mode='min'),
                 keras.callbacks.ModelCheckpoint(modelpath,
-                    monitor='val_loss',
-                    verbose=0,
+                    monitor='val_prob_loss',
+                    verbose=1,
                     save_best_only=True,
                     save_weights_only=True,
                     mode='min',
                     period=1)
                 ],
-            verbose=0,
+            verbose=verbose,
             epochs=self.max_epochs
             )
         self.should_stop = True
@@ -226,44 +219,3 @@ class TsNet:
                 remaining_num -= test_batch_size
             preds[i] = preds_per_ts.mean()
         return preds
-
-#    def train(self, logdir):
-#        # start data fetcher
-#        tt = []
-#        for _ in xrange(NUM_FETCHER):
-#            th = threading.Thread(target=self.fetch_batch_data)
-#            th.setDaemon(True)
-#            th.start()
-#            tt.append(th)
-#
-#        losses = np.zeros(self.max_iter+1)
-#        prob_losses = np.zeros(self.max_iter+1)
-#        corr_losses = np.zeros(self.max_iter+1)
-#        for n_iter in xrange(self.max_iter+1):
-#            data_batch, label_batch, pos_batch1, pos_batch_2 = self.fifo_q.get()
-#            res = self.model.train_on_batch([data_batch, pos_batch1, pos_batch_2],
-#                    [label_batch]*self.num_outputs)
-#            loss = res[0]
-#            prob_loss = res[-1]
-#            corr_loss = np.sum(res[1:-1])
-#            losses[n_iter] = loss
-#            prob_losses[n_iter] = prob_loss
-#            corr_losses[n_iter] = corr_loss
-#            
-#            if n_iter % self.log_n_iter == 0:
-#                logger.info("iter={0}, loss={1:.6f}, "\
-#                        "prob_loss={2:.6f}, corr_loss={3:.6f}".format(
-#                            n_iter, loss, prob_loss, corr_loss))
-#                logger.info("--------------")
-#        
-#        # record losses
-#        train_stat = pd.DataFrame({"loss": losses,
-#            "prob_loss": prob_losses,
-#            "corr_loss": corr_losses}, index=np.arange(self.max_iter+1))
-#        train_stat.to_csv(os.path.join(logdir, "train_stat.csv"))
-#
-#        logger.info("Training done.")
-
-    def save(self, logdir):
-        self.model.save(os.path.join(logdir, "model", "ts_net.h5"))
-        logger.info("Model saved to {}.".format(logdir)) 
