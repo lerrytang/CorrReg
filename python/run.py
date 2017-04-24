@@ -28,6 +28,8 @@ def merge_results(logdir):
 
 
 def main(args):
+    for arg in vars(args):
+        logger.info("{} = {}".format(arg, getattr(args, arg)))
     logdir, modeldir = util.create_log(args.logdir, args.target_obj)
 
     # load data for training
@@ -111,7 +113,7 @@ if __name__ == "__main__":
             help="size of sliding window")
     parser.add_argument("--batch_size", default=32, type=int,
             help="training batch size")
-    parser.add_argument("--max_epochs", default=50, type=int,
+    parser.add_argument("--max_epochs", default=100, type=int,
             help="maximum number of training iterations")
     parser.add_argument("--n_folds", default=3, type=int,
             help="training batch size")

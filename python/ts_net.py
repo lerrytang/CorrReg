@@ -142,29 +142,48 @@ class TsNet:
                     [batch_label]*self.num_outputs)
         logger.info("data_fetcher abort") 
 
+    def get_ordered_batch(self, data, labels, preds_per_ts):
+        data_size, seq_len, num_ch = data.shape
+        stride = int((seq_len - self.win_size) / (preds_per_ts - 1))
+        batch_data = np.zeros([self.batch_size, self.win_size, num_ch])
+        batch_label = np.zeros(self.batch_size)
+        while True:
+            for i in xrange(data_size):
+                offset = 0
+                remaining_num = preds_per_ts
+                while remaining_num > 0:
+                    test_batch_size = np.min([remaining_num, self.batch_size])
+                    for j in xrange(test_batch_size):
+                        start_idx = offset + j * stride
+                        end_idx = start_idx + self.win_size
+                        batch_data[j] = data[i, start_idx:end_idx]
+                        batch_label[j] = labels[i]
+                    yield ([batch_data[:test_batch_size]] * 3,
+                            [batch_label[:test_batch_size]] * self.num_outputs)
+                    offset += test_batch_size
+                    remaining_num -= test_batch_size
+    
     def train(self, train_data, train_label, valid_data, valid_label,
             logdir, modelpath, verbose=0):
 
-        def get_steps(data):
-            samples_per_epoch = np.prod(data.shape[:-1])
-            samples_per_batch = self.win_size * self.batch_size
-            steps_per_epoch =  samples_per_epoch / samples_per_batch
-            return steps_per_epoch
-
-        steps_per_epoch = get_steps(train_data)
-        validation_steps = 2 * get_steps(valid_data)
+        samples_per_epoch = np.prod(train_data.shape[:-1])
+        samples_per_batch = self.win_size * self.batch_size
+        steps_per_epoch =  samples_per_epoch / samples_per_batch
+        preds_per_ts = int(np.ceil(1.0 * valid_data.shape[1] / self.win_size))
+        validation_steps = valid_label.size * preds_per_ts / self.batch_size
         logger.info("max_epochs={}, steps_per_epoch={}, validation_steps={}".format(
             self.max_epochs, steps_per_epoch, validation_steps))
 
         train_hist = self.model.fit_generator(
             generator=self.get_rand_batch(train_data, train_label),
             steps_per_epoch=steps_per_epoch,
-            validation_data=self.get_rand_batch(valid_data, valid_label),
+            validation_data=self.get_ordered_batch(valid_data,
+                valid_label, preds_per_ts),
             validation_steps=validation_steps,
             callbacks=[
                 keras.callbacks.EarlyStopping(monitor='val_prob_loss',
                     min_delta=0.001,
-                    patience=3,
+                    patience=10,
                     verbose=1,
                     mode='min'),
                 keras.callbacks.ModelCheckpoint(modelpath,
