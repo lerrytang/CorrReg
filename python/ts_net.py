@@ -1,9 +1,9 @@
 import keras
 import keras.backend as K
-from keras.layers import Input, Conv1D, Dense, Flatten, Lambda, Reshape, MaxPooling1D
+from keras.layers import Input, Conv1D, Dense, Flatten, Lambda, MaxPooling1D
 from keras.models import Model
 from keras.losses import binary_crossentropy
-from sklearn import metrics
+from keras import optimizers
 import util
 import pandas as pd
 import numpy as np
@@ -68,7 +68,7 @@ class TsNet:
         x_pos_data2 = norm_layer(pos_data2)
         
         # 1D conv
-        conv_params = [(32, 7, 4), (64, 3, 2), (64, 3, 2)]
+        conv_params = [(32, 7, 5), (64, 5, 2), (64, 3, 2), (64, 3, 2)]
         n_convs = len(conv_params)
         loss_weights = [1.0 * self.corr_coef_pp / n_convs] * n_convs
         corr_layer = Lambda(corr_pp, name="corr_pp")
@@ -102,132 +102,46 @@ class TsNet:
         logger.info(loss_weights)
         self.model = Model(inputs=[input_data, pos_data1, pos_data2],
                 outputs=outputs)
-        self.model.compile(optimizer="adam", loss=losses, loss_weights=loss_weights)
+        optimizer = optimizers.Adam(lr=0.001, decay=1e-6)
+        self.model.compile(optimizer=optimizer, loss=losses,
+                loss_weights=loss_weights)
 
-    def build_func(self):
-        self.get_prob = K.function([self.model.layers[0].input],
-                [self.model.layers[14].output])
-
-    def get_rand_batch(self, data, labels):
-        data_size, seq_len, _ = data.shape
-        pos_label_idx = np.where(labels==1)[0]
-        num_pos_samples = np.sum(labels==1)
-        num_neg_samples = np.sum(labels==0)
-        pos_sampling_weight = 1.0 * num_neg_samples / num_pos_samples
-        logger.info("pos_sampling_weight={}".format(
-            pos_sampling_weight))
-        sampling_weights = np.ones(data_size)
-        sampling_weights[labels==1] *= pos_sampling_weight
-        sampling_weights /= np.sum(sampling_weights)
-
-        logger.info("data_fetcher off to work")
-        while not self.should_stop:
-            sample_idx = np.random.choice(data_size, self.batch_size,
-                    p=sampling_weights)
-            batch_label = labels[sample_idx]
-            sample_idx = np.expand_dims(sample_idx, -1)
-            pos_idx1 = np.expand_dims(
-                    np.random.choice(pos_label_idx, self.batch_size), -1)
-            pos_idx2 = np.expand_dims(
-                    np.random.choice(pos_label_idx, self.batch_size), -1)
-            rand_start = np.random.randint(0, seq_len - self.win_size,
-                    self.batch_size)
-            rand_end = rand_start + self.win_size
-            seq_slice = np.array([np.arange(rand_start[i], rand_end[i])
-                for i in xrange(self.batch_size)])
-            batch_data = data[sample_idx, seq_slice]
-            batch_pos_data1 = data[pos_idx1, seq_slice]
-            batch_pos_data2 = data[pos_idx2, seq_slice]
-            yield ([batch_data, batch_pos_data1, batch_pos_data2],
-                    [batch_label]*self.num_outputs)
-        logger.info("data_fetcher abort") 
-
-    def get_ordered_batch(self, data, labels, preds_per_ts):
-        data_size, seq_len, num_ch = data.shape
-        stride = int((seq_len - self.win_size) / (preds_per_ts - 1))
-        batch_data = np.zeros([self.batch_size, self.win_size, num_ch])
-        batch_label = np.zeros(self.batch_size)
-        while True:
-            for i in xrange(data_size):
-                offset = 0
-                remaining_num = preds_per_ts
-                while remaining_num > 0:
-                    test_batch_size = np.min([remaining_num, self.batch_size])
-                    for j in xrange(test_batch_size):
-                        start_idx = offset + j * stride
-                        end_idx = start_idx + self.win_size
-                        batch_data[j] = data[i, start_idx:end_idx]
-                        batch_label[j] = labels[i]
-                    yield ([batch_data[:test_batch_size]] * 3,
-                            [batch_label[:test_batch_size]] * self.num_outputs)
-                    offset += test_batch_size
-                    remaining_num -= test_batch_size
-    
     def train(self, train_data, train_label, valid_data, valid_label,
             logdir, modelpath, verbose=0):
 
         samples_per_epoch = np.prod(train_data.shape[:-1])
         samples_per_batch = self.win_size * self.batch_size
         steps_per_epoch =  samples_per_epoch / samples_per_batch
-        preds_per_ts = int(np.ceil(1.0 * valid_data.shape[1] / self.win_size))
-        validation_steps = valid_label.size * preds_per_ts / self.batch_size
-        logger.info("max_epochs={}, steps_per_epoch={}, validation_steps={}".format(
-            self.max_epochs, steps_per_epoch, validation_steps))
+        steps_per_epoch = 2000
+        logger.info("max_epochs={}, steps_per_epoch={}".format(
+            self.max_epochs, steps_per_epoch))
 
-        train_hist = self.model.fit_generator(
-            generator=self.get_rand_batch(train_data, train_label),
-            steps_per_epoch=steps_per_epoch,
-            validation_data=self.get_ordered_batch(valid_data,
-                valid_label, preds_per_ts),
-            validation_steps=validation_steps,
-            callbacks=[
-                keras.callbacks.EarlyStopping(monitor='val_prob_loss',
-                    min_delta=0.001,
-                    patience=10,
-                    verbose=1,
-                    mode='min'),
-                keras.callbacks.ModelCheckpoint(modelpath,
-                    monitor='val_prob_loss',
-                    verbose=1,
-                    save_best_only=True,
-                    save_weights_only=True,
-                    mode='min',
-                    period=1)
-                ],
-            verbose=verbose,
-            epochs=self.max_epochs
-            )
-        self.should_stop = True
-
+        train_hist = self.model.fit(x=[train_data]*3,
+                y=[train_label]*self.num_outputs,
+                batch_size=self.batch_size,
+                epochs=self.max_epochs,
+                verbose=verbose,
+                validation_data=([valid_data]*3,
+                    [valid_label]*self.num_outputs),
+                callbacks=[
+                    keras.callbacks.ModelCheckpoint(modelpath,
+                        monitor='val_prob_loss',
+                        verbose=1,
+                        save_best_only=True,
+                        save_weights_only=True,
+                        mode='min',
+                        period=1)
+                    ])
         return train_hist
 
-    def test_on_data(self, test_data_files, ts_len, num_channel):
+    def test_on_data(self, test_data_files):
         """Test model performance on the test set""" 
         preds = np.zeros(test_data_files.size)
-        num_pred_per_ts = 600
-        stride = int((ts_len - self.win_size) / (num_pred_per_ts - 1))
-        
         for i, f in enumerate(test_data_files):
             test_data, _, _, _, _ = \
-                    util.load_data(os.path.join(self.test_data_dir, f), "test")
-            test_data = np.transpose(test_data, axes=[1, 0])
-            preds_per_ts = np.zeros(num_pred_per_ts)
-            offset = 0
-            remaining_num = num_pred_per_ts
-            while remaining_num > 0:
-                # segment
-                test_batch_size = np.min([remaining_num, self.batch_size])
-                start_idx = np.arange(offset, offset+test_batch_size*stride,
-                        stride)
-                end_idx = start_idx + self.win_size
-                slice_idx = np.array([np.arange(start_idx[k], end_idx[k])
-                    for k in xrange(test_batch_size)])
-                batch_data = test_data[slice_idx]
-                # get test scores
-                probs = self.get_prob([batch_data])[0].flatten()
-                preds_per_ts[offset:(offset+test_batch_size)] =\
-                        probs[:test_batch_size]
-                offset += test_batch_size
-                remaining_num -= test_batch_size
-            preds[i] = preds_per_ts.mean()
+                    util.load_data(os.path.join(self.test_data_dir, f),
+                            self.win_size, "test")
+            preds_per_ts = self.model.predict_on_batch([test_data] * 3)
+            logger.info(preds_per_ts)
+            preds[i] = preds_per_ts[-1].mean()
         return preds

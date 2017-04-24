@@ -9,6 +9,9 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+NUM_SEQ_PER_TS = 150
+
+
 def create_log(log_dir, target_obj):
     if not os.path.exists(log_dir):
         os.mkdir(log_dir)
@@ -23,7 +26,7 @@ def create_log(log_dir, target_obj):
     return logdir, modeldir
 
 
-def load_data(filename, datatype):
+def load_data(filename, win_size, datatype):
     '''
     Utility for loading .mat files
     '''
@@ -50,10 +53,23 @@ def load_data(filename, datatype):
         sequence = matdata[0][4].flatten()[0]
     # ensure channel order
     data = data[np.argsort(channels)]
-    return data, data_length_sec, sampling_frequency, channels, sequence
+    # channel last
+    data = np.transpose(data, axes=[1, 0])
+    # reshape data
+    segs_per_ts = NUM_SEQ_PER_TS
+    seq_len = data.shape[0]
+    stride = int((seq_len - win_size) / (segs_per_ts - 1))
+    logger.debug("seq_len={}, segs_per_ts={}, stride={}".format(
+        seq_len, segs_per_ts, stride))
+    start_idx = np.arange(0, seq_len - win_size + 1,
+            stride, dtype="int32")
+    assert start_idx.size == segs_per_ts
+    slice_idx = np.array([np.arange(ss, ss + win_size)
+        for ss in start_idx])
+    return data[slice_idx], data_length_sec, sampling_frequency, channels, sequence
 
 
-def load_all_data(dirname, datatype):
+def load_all_data(dirname, win_size, datatype):
     '''
     Load all data of datatype from a directory
     '''
@@ -64,37 +80,40 @@ def load_all_data(dirname, datatype):
     # load data
     datafiles = os.listdir(dirname)
     datafiles = np.sort([f for f in datafiles if datatype in f])
-    all_data = None
     for idx, datafile in enumerate(datafiles):
         filename = os.path.join(dirname, datafile)
-        res = load_data(filename, datatype)
+        res = load_data(filename, win_size, datatype)
         data, data_length_sec, sampling_frequency, channels, sequence = res
-        if all_data is None:
-            num_channel, seq_len = data.shape
-            all_data = np.zeros([len(datafiles), seq_len, num_channel],
-                    dtype=data.dtype)
-        all_data[idx] = np.transpose(data, axes=[1, 0])
+        if idx == 0:
+            segs_per_ts = NUM_SEQ_PER_TS
+            all_data = np.zeros([len(datafiles) * segs_per_ts, win_size,
+                len(channels)], dtype=data.dtype)
+            offset = 0
+        all_data[offset:(offset+segs_per_ts)] = data
+        offset += segs_per_ts
+        logger.debug("offset={}".format(offset))
+    assert offset == all_data.shape[0]
     logger.info("Data from {} (shape:{}, dtype:{})".format(dirname,
         all_data.shape, all_data.dtype))
-    return all_data
+    return all_data, segs_per_ts
 
 
-def load_train_data(target_data_dir):
+def load_train_data(target_data_dir, win_size):
     # load data
     data_files = os.listdir(target_data_dir)
     pre_data_files = np.sort([f for f in data_files if "preictal" in f])
     logger.info("#preictal_files = {}".format(pre_data_files.size))
     int_data_files = np.sort([f for f in data_files if "interictal" in f])
     logger.info("#interictal_files = {}".format(int_data_files.size))
-    pre_data = load_all_data(target_data_dir, "preictal")
+    pre_data, segs_per_ts = load_all_data(target_data_dir, win_size, "preictal")
     logger.info("interictal_data.shape={}".format(pre_data.shape))
-    int_data = load_all_data(target_data_dir, "interictal")
+    int_data, _ = load_all_data(target_data_dir, win_size, "interictal")
     logger.info("interictal_data.shape={}".format(int_data.shape))
     # split
     labels = np.array([1] * pre_data_files.size + \
             [0] * int_data_files.size, dtype="uint8")
     data = np.concatenate([pre_data, int_data])
-    return data, labels
+    return data, labels, segs_per_ts
 
 
 def split_to_folds(labels, n_folds=2):

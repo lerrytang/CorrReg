@@ -35,7 +35,8 @@ def main(args):
     # load data for training
     target_data_dir = os.path.join(args.data_dir, args.target_obj)
     logger.info("target_data_dir={}".format(target_data_dir))
-    data, labels = util.load_train_data(target_data_dir)
+    data, labels, segs_per_ts = util.load_train_data(
+            target_data_dir, args.win_size)
     train_ix, valid_ix = util.split_to_folds(labels, args.n_folds)
     num_seq, seq_len, num_ch = data.shape
     logger.info("num_seq={}, seq_len={}, num_ch={}".format(
@@ -56,24 +57,32 @@ def main(args):
 
         # split data
         train_indice = train_ix[fold_i]
-        train_data, train_labels = data[train_indice], labels[train_indice]
-        valid_indice = valid_ix[fold_i]
-        valid_data, valid_labels = data[valid_indice], labels[valid_indice]
+        train_labels = np.repeat(labels[train_indice], segs_per_ts)
+        train_data_indice = np.concatenate([i*segs_per_ts + np.arange(segs_per_ts) 
+            for i in train_indice])
+        train_data = data[train_data_indice]
         logger.info("train_data.shape={}".format(train_data.shape))
+        logger.info("train_labels.shape={}".format(train_labels.shape))
+
+        valid_indice = valid_ix[fold_i]
+        valid_labels = np.repeat(labels[valid_indice], segs_per_ts)
+        valid_data_indice = np.concatenate([i*segs_per_ts + np.arange(segs_per_ts) 
+            for i in valid_indice])
+        valid_data = data[valid_data_indice]
         logger.info("valid_data.shape={}".format(valid_data.shape))
-        
+        logger.info("valid_labels.shape={}".format(valid_labels.shape))
+
         # build net
         logger.info("Build model")
         model = TsNet(args, train_mean, train_std, num_ch)
         model.build_model()
-        model.build_func()
 
         # train
         logger.info("Start to train")
         modelname = "bestmodel_fold" + str(fold_i) + ".h5"
         modelpath = os.path.join(logdir, "model", modelname)
         train_hist = model.train(train_data, train_labels,
-                valid_data, valid_labels, logdir, modelpath)
+                valid_data, valid_labels, logdir, modelpath, args.verbose)
 
         # log training history
         hist_file = os.path.join(logdir, "hist_fold"+str(fold_i)+".pkl")
@@ -90,7 +99,7 @@ def main(args):
         # test
         logger.info("Load model to test")
         model.model.load_weights(os.path.join(logdir, "model", modelname))
-        preds = model.test_on_data(test_data_files, seq_len, num_ch)
+        preds = model.test_on_data(test_data_files)
         output = pd.Series(preds, index=test_data_files)
         output_file = os.path.join(logdir, "output_fold"+str(fold_i)+".csv")
         output.to_csv(output_file)
@@ -109,11 +118,11 @@ if __name__ == "__main__":
             help="directory of train_mean_std.npz")
     parser.add_argument("--corr_coef_pp", default=0.0, type=float,
             help="coefficient for triplet loss (positive and positive")
-    parser.add_argument("--win_size", default=8000, type=int,
+    parser.add_argument("--win_size", default=4000, type=int,
             help="size of sliding window")
     parser.add_argument("--batch_size", default=32, type=int,
             help="training batch size")
-    parser.add_argument("--max_epochs", default=100, type=int,
+    parser.add_argument("--max_epochs", default=50, type=int,
             help="maximum number of training iterations")
     parser.add_argument("--n_folds", default=3, type=int,
             help="training batch size")
