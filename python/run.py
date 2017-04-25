@@ -35,8 +35,7 @@ def main(args):
     # load data for training
     target_data_dir = os.path.join(args.data_dir, args.target_obj)
     logger.info("target_data_dir={}".format(target_data_dir))
-    data, labels, segs_per_ts = util.load_train_data(
-            target_data_dir, args.win_size)
+    data, labels = util.load_train_data(target_data_dir)
     train_ix, valid_ix = util.split_to_folds(labels, args.n_folds)
     num_seq, seq_len, num_ch = data.shape
     logger.info("num_seq={}, seq_len={}, num_ch={}".format(
@@ -57,48 +56,33 @@ def main(args):
 
         # split data
         train_indice = train_ix[fold_i]
-        train_labels = np.repeat(labels[train_indice], segs_per_ts)
-        train_data_indice = np.concatenate([i*segs_per_ts + np.arange(segs_per_ts) 
-            for i in train_indice])
-        train_data = data[train_data_indice]
-        logger.info("train_data.shape={}".format(train_data.shape))
-        logger.info("train_labels.shape={}".format(train_labels.shape))
-
         valid_indice = valid_ix[fold_i]
-        valid_labels = np.repeat(labels[valid_indice], segs_per_ts)
-        valid_data_indice = np.concatenate([i*segs_per_ts + np.arange(segs_per_ts) 
-            for i in valid_indice])
-        valid_data = data[valid_data_indice]
-        logger.info("valid_data.shape={}".format(valid_data.shape))
-        logger.info("valid_labels.shape={}".format(valid_labels.shape))
-
+    
         # build net
         logger.info("Build model")
         model = TsNet(args, train_mean, train_std, num_ch)
         model.build_model()
-
+    
         # train
-        logger.info("Start to train")
         modelname = "bestmodel_fold" + str(fold_i) + ".h5"
         modelpath = os.path.join(logdir, "model", modelname)
-        train_hist = model.train(train_data, train_labels,
-                valid_data, valid_labels, logdir, modelpath, args.verbose)
-
+        train_hist = model.train(data[train_indice], labels[train_indice],
+                data[valid_indice], labels[valid_indice],
+                logdir, modelpath, args.verbose)
+    
         # log training history
         hist_file = os.path.join(logdir, "hist_fold"+str(fold_i)+".pkl")
         with open(hist_file, "wb") as f:
             pickle.dump(train_hist.history, f)
-            
+    
         # load test data
-        del train_data, train_labels, valid_data, valid_labels
-        gc.collect()
+        logger.info("Load model to test")
+        model.model.load_weights(os.path.join(logdir, "model", modelname))
+           
+        # test
         data_files = os.listdir(target_data_dir)
         test_data_files = np.sort([f for f in data_files if "test" in f])
         logger.info("#test_files = {}".format(test_data_files.size))
-
-        # test
-        logger.info("Load model to test")
-        model.model.load_weights(os.path.join(logdir, "model", modelname))
         preds = model.test_on_data(test_data_files)
         output = pd.Series(preds, index=test_data_files)
         output_file = os.path.join(logdir, "output_fold"+str(fold_i)+".csv")
@@ -132,6 +116,8 @@ if __name__ == "__main__":
             help="L2 regularization strength")
     parser.add_argument("--dropout_prob", default=0.0, type=float,
             help="dropout probability")
+    parser.add_argument("--init_lr", default=0.0002, type=float,
+            help="initial learning rate")
     parser.add_argument("target_obj",
             help="must be in the set (Dog_1, Dog_2, Dog_3,"
             " Dog_4, Dog_5, Patient_1, Patient_2)")
