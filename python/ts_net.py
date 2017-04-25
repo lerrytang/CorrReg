@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 class TsNet:
 
     def __init__(self, args, train_mean, train_std, num_channel):
-
+        self.data_rebalance = args.data_rebalance
         self.reg_coef = args.reg_coef
         self.lr = args.init_lr
         self.win_size = args.win_size
@@ -27,7 +27,7 @@ class TsNet:
         self.train_std = train_std
         self.num_channel = num_channel
 
-    def build_model(self):
+    def build_model(self, logdir=None):
 
         def corr_loss_func(y_true, y_pred):
             return y_pred
@@ -111,12 +111,20 @@ class TsNet:
         self.model.compile(optimizer=optimizer,
                 loss=losses, loss_weights=loss_weights)
 
+        if logdir is not None:
+            from keras.utils import plot_model
+            plot_model(self.model,
+                    to_file=os.path.join(logdir, 'model.png'),
+                    show_shapes=True)
+
     def get_rand_batch(self, data, labels):
         data_size, seq_len, _ = data.shape
         pos_label_idx = np.where(labels==1)[0]
         num_pos_samples = np.sum(labels==1)
         num_neg_samples = np.sum(labels==0)
-        pos_sampling_weight = 1.0 * num_neg_samples / num_pos_samples
+        pos_sampling_weight = 1.0
+        if self.data_rebalance:
+            pos_sampling_weight *= float(num_neg_samples) / num_pos_samples
         logger.info("pos_sampling_weight={}".format(
             pos_sampling_weight))
         sampling_weights = np.ones(data_size)

@@ -64,7 +64,7 @@ def main(args):
         # build net
         logger.info("Build model")
         model = TsNet(args, train_mean, train_std, num_ch)
-        model.build_model()
+        model.build_model(logdir=logdir if fold_i==0 else None)
     
         # train
         modelname = "bestmodel_fold" + str(fold_i) + ".h5"
@@ -97,6 +97,8 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--data_rebalance", action="store_true", default=False,
+            help="whether to rebalance dataset")
     parser.add_argument("--data_dir", default="../data",
             help="directory of data")
     parser.add_argument("--logdir", default="./log",
@@ -113,6 +115,8 @@ if __name__ == "__main__":
             help="maximum number of training iterations")
     parser.add_argument("--n_folds", default=3, type=int,
             help="training batch size")
+    parser.add_argument("--rand_seed", default=11, type=int,
+            help="random seed for reproducibility")
     parser.add_argument("--verbose", default=0, type=int,
             help="verbose for training process")
     parser.add_argument("--reg_coef", default=0.0, type=float,
@@ -125,5 +129,7 @@ if __name__ == "__main__":
             help="must be in the set (Dog_1, Dog_2, Dog_3,"
             " Dog_4, Dog_5, Patient_1, Patient_2)")
     args = parser.parse_args()
+
+    np.random.seed(args.rand_seed)
 
     main(args)
