@@ -37,6 +37,9 @@ def main(args):
     logger.info("target_data_dir={}".format(target_data_dir))
     data, labels = util.load_train_data(target_data_dir)
     train_ix, valid_ix = util.split_to_folds(labels, args.n_folds)
+    split_file = os.path.join(logdir, "train_valid_split.pkl")
+    with open(split_file, "wb") as f:
+        pickle.dump((train_ix, valid_ix), f)
     num_seq, seq_len, num_ch = data.shape
     logger.info("num_seq={}, seq_len={}, num_ch={}".format(
         num_seq, seq_len, num_ch))
