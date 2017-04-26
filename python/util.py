@@ -23,7 +23,7 @@ def create_log(log_dir, target_obj):
     return logdir, modeldir
 
 
-def load_data(filename, datatype):
+def load_data(filename, datatype, downsample=0):
     '''
     Utility for loading .mat files
     '''
@@ -50,17 +50,26 @@ def load_data(filename, datatype):
         sequence = matdata[0][4].flatten()[0]
     # ensure channel order
     data = data[np.argsort(channels)]
-    return data, data_length_sec, sampling_frequency, channels, sequence
-
-
-def load_data_for_test(filename, win_size):
-    data, _, _, _, _ = load_data(filename, "test")
     # channel last
     data = np.transpose(data, axes=[1, 0])
+    seq_len, num_ch = data.shape
+    if downsample > 1:
+        data = reshape(data, downsample)
+        logger.info("data.shape={}".format(data.shape))
+        downsample_mean = np.mean(data, axis=1)
+        logger.info("downsample_mean.shape={}".format(downsample_mean.shape))
+        downsample_std = np.std(data, axis=1)
+        data = np.concatenate([downsample_mean, downsample_std], axis=-1)
+#    return data, data_length_sec, sampling_frequency, channels, sequence
+    return data
+
+
+def load_data_for_test(filename, win_size, downsample=0):
+    data = load_data(filename, "test", downsample)
     return reshape(data, win_size)
 
 
-def load_all_data(dirname, datatype):
+def load_all_data(dirname, datatype, downsample=0):
     '''
     Load all data of datatype from a directory
     '''
@@ -74,28 +83,27 @@ def load_all_data(dirname, datatype):
     all_data = None
     for idx, datafile in enumerate(datafiles):
         filename = os.path.join(dirname, datafile)
-        res = load_data(filename, datatype)
-        data, data_length_sec, sampling_frequency, channels, sequence = res
+        data = load_data(filename, datatype, downsample)
         if all_data is None:
-            num_channel, seq_len = data.shape
+            seq_len, num_channel = data.shape
             all_data = np.zeros([len(datafiles), seq_len, num_channel],
                     dtype=data.dtype)
-        all_data[idx] = np.transpose(data, axes=[1, 0])
+        all_data[idx] = data
     logger.info("Data from {} (shape:{}, dtype:{})".format(dirname,
         all_data.shape, all_data.dtype))
     return all_data
 
 
-def load_train_data(target_data_dir):
+def load_train_data(target_data_dir, downsample):
     # load data
     data_files = os.listdir(target_data_dir)
     pre_data_files = np.sort([f for f in data_files if "preictal" in f])
     logger.info("#preictal_files = {}".format(pre_data_files.size))
     int_data_files = np.sort([f for f in data_files if "interictal" in f])
     logger.info("#interictal_files = {}".format(int_data_files.size))
-    pre_data = load_all_data(target_data_dir, "preictal")
+    pre_data = load_all_data(target_data_dir, "preictal", downsample)
     logger.info("interictal_data.shape={}".format(pre_data.shape))
-    int_data = load_all_data(target_data_dir, "interictal")
+    int_data = load_all_data(target_data_dir, "interictal", downsample)
     logger.info("interictal_data.shape={}".format(int_data.shape))
     # split
     labels = np.array([1] * pre_data_files.size + \

@@ -22,6 +22,7 @@ class TsNet:
         self.batch_size = args.batch_size
         self.max_epochs = args.max_epochs
         self.corr_coef_pp = args.corr_coef_pp
+        self.downsample = args.downsample
         self.test_data_dir = os.path.join(args.data_dir, args.target_obj)
         self.train_mean = train_mean
         self.train_std = train_std
@@ -69,7 +70,7 @@ class TsNet:
         x_pos_data2 = norm_layer(pos_data2)
         
         # 1D conv
-        conv_params = [(32, 7, 5), (64, 5, 2), (64, 3, 2), (64, 3, 2)]
+        conv_params = [(32, 7, 5), (64, 5, 2), (64, 3, 2)]
         n_convs = len(conv_params)
         loss_weights = [1.0 * self.corr_coef_pp / n_convs] * n_convs
         corr_layer = Lambda(corr_pp, name="corr_pp")
@@ -201,7 +202,9 @@ class TsNet:
         preds = np.zeros(test_data_files.size)
         for i, f in enumerate(test_data_files):
             test_data = util.load_data_for_test(
-                    os.path.join(self.test_data_dir, f), self.win_size)
+                    os.path.join(self.test_data_dir, f),
+                    self.win_size,
+                    self.downsample)
             preds_per_ts = self.model.predict_on_batch([test_data] * 3)
             preds[i] = preds_per_ts[-1].mean()
         return preds

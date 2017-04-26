@@ -35,7 +35,7 @@ def main(args):
     # load data for training
     target_data_dir = os.path.join(args.data_dir, args.target_obj)
     logger.info("target_data_dir={}".format(target_data_dir))
-    data, labels = util.load_train_data(target_data_dir)
+    data, labels = util.load_train_data(target_data_dir, args.downsample)
     train_ix, valid_ix = util.split_to_folds(labels, args.n_folds)
     split_file = os.path.join(logdir, "train_valid_split.pkl")
     with open(split_file, "wb") as f:
@@ -108,6 +108,8 @@ if __name__ == "__main__":
             help="directory to store logs")
     parser.add_argument("--corr_coef_pp", default=0.0, type=float,
             help="coefficient for triplet loss (positive and positive")
+    parser.add_argument("--downsample", default=0, type=int,
+            help="ratio to downsample data")
     parser.add_argument("--win_size", default=4000, type=int,
             help="size of sliding window")
     parser.add_argument("--batch_size", default=32, type=int,
@@ -124,7 +126,7 @@ if __name__ == "__main__":
             help="L2 regularization strength")
     parser.add_argument("--dropout_prob", default=0.0, type=float,
             help="dropout probability")
-    parser.add_argument("--init_lr", default=0.0001, type=float,
+    parser.add_argument("--init_lr", default=0.0002, type=float,
             help="initial learning rate")
     parser.add_argument("target_obj",
             help="must be in the set (Dog_1, Dog_2, Dog_3,"
