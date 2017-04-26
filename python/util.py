@@ -55,12 +55,11 @@ def load_data(filename, datatype, downsample=0):
     seq_len, num_ch = data.shape
     if downsample > 1:
         data = reshape(data, downsample)
-        logger.info("data.shape={}".format(data.shape))
+        logger.debug("data.shape={}".format(data.shape))
         downsample_mean = np.mean(data, axis=1)
-        logger.info("downsample_mean.shape={}".format(downsample_mean.shape))
+        logger.debug("downsample_mean.shape={}".format(downsample_mean.shape))
         downsample_std = np.std(data, axis=1)
         data = np.concatenate([downsample_mean, downsample_std], axis=-1)
-#    return data, data_length_sec, sampling_frequency, channels, sequence
     return data
 
 

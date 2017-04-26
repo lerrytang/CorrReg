@@ -4,6 +4,7 @@ from keras.layers import Input, Conv1D, Dense, Flatten, Lambda, MaxPooling1D
 from keras.models import Model
 from keras.losses import binary_crossentropy
 from keras import regularizers, optimizers
+from sklearn import metrics
 import util
 import pandas as pd
 import numpy as np
@@ -125,7 +126,7 @@ class TsNet:
         num_neg_samples = np.sum(labels==0)
         pos_sampling_weight = 1.0
         if self.data_rebalance:
-            pos_sampling_weight *= float(num_neg_samples) / num_pos_samples
+            pos_sampling_weight *= (0.5 * num_neg_samples / num_pos_samples)
         logger.info("pos_sampling_weight={}".format(
             pos_sampling_weight))
         sampling_weights = np.ones(data_size)
@@ -136,7 +137,14 @@ class TsNet:
         while True:
             sample_idx = np.random.choice(data_size, self.batch_size,
                     p=sampling_weights)
+
+            # prevent batches of only negative samples
+            if np.intersect1d(sample_idx, pos_label_idx).size == 0:
+                sample_idx[0] = pos_label_idx[np.random.randint(0,
+                    pos_label_idx.size)]
             batch_label = labels[sample_idx]
+            assert np.any(batch_label==1)
+
             sample_idx = np.expand_dims(sample_idx, -1)
             pos_idx1 = np.expand_dims(
                     np.random.choice(pos_label_idx, self.batch_size), -1)
@@ -173,24 +181,37 @@ class TsNet:
                 "validation_steps={}".format(
                     self.max_epochs, steps_per_epoch, validation_steps))
 
+        self.best_acc = 0.0
+        self.best_rec = 0.0 
+
+        def test_on_valid(epoch, logs):
+            probs = np.zeros(valid_label.size)
+            for i, label in enumerate(valid_label):
+                batch_data = util.reshape(valid_data[i], self.win_size)
+                preds_per_ts = self.model.predict_on_batch([batch_data] * 3)
+                probs[i] = preds_per_ts[-1].mean()
+            preds = probs>0.5
+            acc = metrics.precision_score(valid_label, preds)
+            rec = metrics.recall_score(valid_label, preds)
+            logger.info("------------")
+            logger.info("Epoch: {}, val_acc={}, val_recall={}".format(
+                epoch, acc, rec))
+            if acc>self.best_acc or (acc==self.best_acc and rec>self.best_rec):
+                self.best_acc = acc
+                self.best_rec = rec
+                logger.info("Best scores updated!")
+                logger.info("Saving checkpoint ...")
+                self.model.save_weights(modelpath)
+                logger.info("Model saved.")
+
         train_hist = self.model.fit_generator(
             generator=self.get_rand_batch(train_data, train_label),
             steps_per_epoch=steps_per_epoch,
             validation_data=self.get_ordered_batch(valid_data, valid_label),
             validation_steps=validation_steps,
             callbacks=[
-#                keras.callbacks.EarlyStopping(monitor='val_prob_loss',
-#                    min_delta=0.0001,
-#                    patience=5,
-#                    verbose=1,
-#                    mode='min'),
-                keras.callbacks.ModelCheckpoint(modelpath,
-                    monitor='val_prob_loss',
-                    verbose=1,
-                    save_best_only=True,
-                    save_weights_only=True,
-                    mode='min',
-                    period=1)
+                keras.callbacks.LambdaCallback(
+                    on_epoch_end=test_on_valid)
                 ],
             verbose=verbose,
             epochs=self.max_epochs

@@ -57,6 +57,8 @@ def main(args):
         train_indice = train_ix[fold_i]
         valid_indice = valid_ix[fold_i]
         logger.info(valid_indice)
+        logger.info("pos% in train: {}".format(labels[train_indice].mean()))
+        logger.info("pos% in valid: {}".format(labels[valid_indice].mean()))
         train_mean = np.mean(data_mean[train_indice], axis=0)
         train_std = np.mean(data_std[train_indice], axis=0)
         logger.info("train_mean.shape={}".format(train_mean.shape))
