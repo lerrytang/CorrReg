@@ -205,3 +205,21 @@ class TsNet:
             preds_per_ts = self.model.predict_on_batch([test_data] * 3)
             preds[i] = preds_per_ts[-1].mean()
         return preds
+
+
+class MeanStdCal:
+
+    def __init__(self, seq_len, num_ch):
+        input_data = Input(shape=(seq_len, num_ch), dtype="float32")
+        data_mean = Lambda(lambda x: K.mean(x, axis=1))(input_data)
+        data_std = Lambda(lambda x: K.std(x, axis=1))(input_data)
+        self.mm = Model(input_data, [data_mean, data_std])
+
+    def get_mean_std(self, data):
+        data_mean, data_std = self.mm.predict(data)
+        assert not np.any(np.isnan(data_mean))
+        assert not np.any(np.isnan(data_std))
+        assert not np.any(np.isinf(data_mean))
+        assert not np.any(np.isinf(data_std))
+        return data_mean, data_std
+

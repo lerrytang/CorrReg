@@ -1,6 +1,6 @@
 import pickle
 import util
-from ts_net import TsNet
+from ts_net import TsNet, MeanStdCal
 import argparse
 import time
 import pandas as pd
@@ -44,13 +44,9 @@ def main(args):
     logger.info("num_seq={}, seq_len={}, num_ch={}".format(
         num_seq, seq_len, num_ch))
 
-    # load mean and std
-    npzfile_path = os.path.join(args.train_mean_std_dir,
-            args.target_obj, "train_mean_std.npz")
-    logger.info("npzfile_path={}".format(npzfile_path))
-    npzfile = np.load(npzfile_path)
-    train_mean = npzfile["train_mean"]
-    train_std = npzfile["train_std"]
+    # calculate mean and std
+    mm = MeanStdCal(seq_len, num_ch)
+    data_mean, data_std = mm.get_mean_std(data)
 
     # CV
     for fold_i in xrange(args.n_folds):
@@ -60,6 +56,13 @@ def main(args):
         # split data
         train_indice = train_ix[fold_i]
         valid_indice = valid_ix[fold_i]
+        logger.info(valid_indice)
+        train_mean = np.mean(data_mean[train_indice], axis=0)
+        train_std = np.mean(data_std[train_indice], axis=0)
+        logger.info("train_mean.shape={}".format(train_mean.shape))
+        logger.info("train_mean={}".format(train_mean))
+        logger.info("train_std.shape={}".format(train_std.shape))
+        logger.info("train_std={}".format(train_std))
     
         # build net
         logger.info("Build model")
@@ -103,8 +106,6 @@ if __name__ == "__main__":
             help="directory of data")
     parser.add_argument("--logdir", default="./log",
             help="directory to store logs")
-    parser.add_argument("--train_mean_std_dir", default="../train_mean_std_dir",
-            help="directory of train_mean_std.npz")
     parser.add_argument("--corr_coef_pp", default=0.0, type=float,
             help="coefficient for triplet loss (positive and positive")
     parser.add_argument("--win_size", default=4000, type=int,
@@ -123,7 +124,7 @@ if __name__ == "__main__":
             help="L2 regularization strength")
     parser.add_argument("--dropout_prob", default=0.0, type=float,
             help="dropout probability")
-    parser.add_argument("--init_lr", default=0.0002, type=float,
+    parser.add_argument("--init_lr", default=0.0001, type=float,
             help="initial learning rate")
     parser.add_argument("target_obj",
             help="must be in the set (Dog_1, Dog_2, Dog_3,"
