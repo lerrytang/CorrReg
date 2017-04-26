@@ -181,6 +181,7 @@ class TsNet:
                 "validation_steps={}".format(
                     self.max_epochs, steps_per_epoch, validation_steps))
 
+        self.best_f1 = 0.0
         self.best_acc = 0.0
         self.best_rec = 0.0 
 
@@ -191,12 +192,16 @@ class TsNet:
                 preds_per_ts = self.model.predict_on_batch([batch_data] * 3)
                 probs[i] = preds_per_ts[-1].mean()
             preds = probs>0.5
+            f1 = metrics.f1_score(valid_label, preds)
             acc = metrics.precision_score(valid_label, preds)
             rec = metrics.recall_score(valid_label, preds)
             logger.info("------------")
-            logger.info("Epoch: {}, val_acc={}, val_recall={}".format(
-                epoch, acc, rec))
-            if acc>self.best_acc or (acc==self.best_acc and rec>self.best_rec):
+            logger.info("Epoch={}, val_f1={}, val_acc={}, val_recall={}".format(
+                epoch, f1, acc, rec))
+            if f1>self.best_f1 or\
+                    (f1==self.best_f1 and acc>self.best_acc) or\
+                    (f1==self.best_f1 and acc==self.best_acc and rec>=self.best_rec):
+                self.best_f1 = f1
                 self.best_acc = acc
                 self.best_rec = rec
                 logger.info("Best scores updated!")
