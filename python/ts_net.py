@@ -1,9 +1,10 @@
 import keras
 import keras.backend as K
-from keras.layers import Input, Conv1D, Dense, Flatten, Lambda, MaxPooling1D
+from keras.layers import Input, Conv1D, Dense, Flatten, Lambda
 from keras.models import Model
 from keras.losses import binary_crossentropy
 from keras import regularizers, optimizers
+import tensorflow as tf
 from sklearn import metrics
 import util
 import pandas as pd
@@ -11,6 +12,10 @@ import numpy as np
 import os
 import logging
 logger = logging.getLogger(__name__)
+
+
+DECAY_STEPS = 2000
+DECAY_RATE = 0.95
 
 
 class TsNet:
@@ -71,24 +76,22 @@ class TsNet:
         x_pos_data2 = norm_layer(pos_data2)
         
         # 1D conv
-        conv_params = [(32, 7, 5), (64, 5, 2), (64, 3, 2)]
+#        conv_params = [(32, 7, 5), (64, 5, 2), (64, 3, 2)]
+        conv_params = [(32, 8, 4), (64, 5, 2), (64, 2, 2)]
         n_convs = len(conv_params)
         loss_weights = [1.0 * self.corr_coef_pp / n_convs] * n_convs
         corr_layer = Lambda(corr_pp, name="corr_pp")
         for i, conv_param in enumerate(conv_params):
             num_filter, filter_size, pool_size = conv_param
             conv_layer = Conv1D(num_filter, filter_size,
-                    activation="relu", padding="same",
+                    strides=pool_size,
+                    activation="relu", padding="valid",
                     kernel_regularizer=regularizers.l2(self.reg_coef),
                     name="conv" + str(i+1))
-            maxpool_layer = MaxPooling1D(pool_size=pool_size, strides=pool_size)
             x_all_data = conv_layer(x_all_data)
             x_pos_data1 = conv_layer(x_pos_data1)
             x_pos_data2 = conv_layer(x_pos_data2)
             corr_pp = corr_layer([x_pos_data1, x_pos_data2])
-            x_all_data = maxpool_layer(x_all_data)
-            x_pos_data1 = maxpool_layer(x_pos_data1)
-            x_pos_data2 = maxpool_layer(x_pos_data2)
             outputs.append(corr_pp)
             losses.append(corr_loss_func)
 
@@ -109,7 +112,12 @@ class TsNet:
         logger.info(loss_weights)
         self.model = Model(inputs=[input_data, pos_data1, pos_data2],
                 outputs=outputs)
-        optimizer = optimizers.Adam(lr=self.lr, decay=1e-6)
+#        optimizer = optimizers.Adam(lr=self.lr, decay=1e-6)
+        global_step = tf.Variable(0, name="global_step", trainable=False)
+        lr = tf.train.exponential_decay(self.lr, global_step,
+           DECAY_STEPS, DECAY_RATE, staircase=True)
+        optimizer = optimizers.TFOptimizer(tf.train.AdamOptimizer(self.lr))
+
         self.model.compile(optimizer=optimizer,
                 loss=losses, loss_weights=loss_weights)
 
@@ -126,7 +134,7 @@ class TsNet:
         num_neg_samples = np.sum(labels==0)
         pos_sampling_weight = 1.0
         if self.data_rebalance:
-            pos_sampling_weight *= (0.5 * num_neg_samples / num_pos_samples)
+            pos_sampling_weight *= (1.0 * num_neg_samples / num_pos_samples)
         logger.info("pos_sampling_weight={}".format(
             pos_sampling_weight))
         sampling_weights = np.ones(data_size)
