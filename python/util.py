@@ -87,7 +87,7 @@ def load_all_data(dirname, datatype, downsample=0):
             seq_len, num_channel = data.shape
             all_data = np.zeros([len(datafiles), seq_len, num_channel],
                     dtype=data.dtype)
-        all_data[idx] = data
+        all_data[idx] = np.copy(data)
     logger.info("Data from {} (shape:{}, dtype:{})".format(dirname,
         all_data.shape, all_data.dtype))
     return all_data
@@ -108,6 +108,7 @@ def load_train_data(target_data_dir, downsample):
     labels = np.array([1] * pre_data_files.size + \
             [0] * int_data_files.size, dtype="uint8")
     data = np.concatenate([pre_data, int_data])
+    logger.info("data.dtype={}".format(data.dtype))
     return data, labels
 
 
@@ -123,13 +124,16 @@ def split_to_folds(labels, n_folds=2):
 
 def reshape(data, win_size):
     # reshape data
-    seq_len = data.shape[0]
-    segs_per_ts = int(np.ceil(seq_len / win_size))
+    seq_len, num_ch = data.shape
+    segs_per_ts = int(np.ceil(1.0 * seq_len / win_size))
     stride = int((seq_len - win_size) / (segs_per_ts - 1))
-    logger.debug("seq_len={}, segs_per_ts={}, stride={}".format(
-        seq_len, segs_per_ts, stride))
-    start_idx = np.arange(0, seq_len - win_size + 1,
-            stride, dtype="int32")
+    logger.debug("seq_len={}, num_ch={}, segs_per_ts={}, stride={}".format(
+        seq_len, num_ch, segs_per_ts, stride))
+    start_idx = np.arange(0, seq_len - win_size + 1, stride)
     assert start_idx.size == segs_per_ts
     slice_idx = np.array([np.arange(ss, ss + win_size) for ss in start_idx])
-    return data[slice_idx]
+    reshaped_data = data[slice_idx]
+    # debug
+#    for i,s in enumerate(start_idx):
+#        assert np.all(data[s:s+win_size] == reshaped_data[i])
+    return reshaped_data

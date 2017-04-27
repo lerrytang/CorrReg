@@ -1,6 +1,7 @@
 import keras
 import keras.backend as K
 from keras.layers import Input, Conv1D, Dense, Flatten, Lambda
+from keras.layers import Activation, BatchNormalization
 from keras.models import Model
 from keras.losses import binary_crossentropy
 from keras import regularizers, optimizers
@@ -23,7 +24,7 @@ class TsNet:
     def __init__(self, args, train_mean, train_std, num_channel):
         self.data_rebalance = args.data_rebalance
         self.reg_coef = args.reg_coef
-        self.lr = args.init_lr
+        self.init_lr = args.init_lr
         self.win_size = args.win_size
         self.batch_size = args.batch_size
         self.max_epochs = args.max_epochs
@@ -59,6 +60,7 @@ class TsNet:
         # outputs
         outputs = []
         losses = []
+        loss_weights = []
         
         # inputs
         input_data = Input(shape=(self.win_size, self.num_channel),
@@ -75,33 +77,52 @@ class TsNet:
         x_pos_data1 = norm_layer(pos_data1)
         x_pos_data2 = norm_layer(pos_data2)
         
-        # 1D conv
-#        conv_params = [(32, 7, 5), (64, 5, 2), (64, 3, 2)]
         conv_params = [(32, 8, 4), (64, 5, 2), (64, 2, 2)]
         n_convs = len(conv_params)
         loss_weights = [1.0 * self.corr_coef_pp / n_convs] * n_convs
         corr_layer = Lambda(corr_pp, name="corr_pp")
         for i, conv_param in enumerate(conv_params):
             num_filter, filter_size, pool_size = conv_param
+            # conv
             conv_layer = Conv1D(num_filter, filter_size,
                     strides=pool_size,
-                    activation="relu", padding="valid",
                     kernel_regularizer=regularizers.l2(self.reg_coef),
                     name="conv" + str(i+1))
             x_all_data = conv_layer(x_all_data)
             x_pos_data1 = conv_layer(x_pos_data1)
             x_pos_data2 = conv_layer(x_pos_data2)
+            # corr
             corr_pp = corr_layer([x_pos_data1, x_pos_data2])
             outputs.append(corr_pp)
             losses.append(corr_loss_func)
+            # batch norm
+            bn_layer = BatchNormalization()
+            x_all_data = bn_layer(x_all_data)
+            x_pos_data1 = bn_layer(x_pos_data1)
+            x_pos_data2 = bn_layer(x_pos_data2)
+            # relu
+            activation_layer = Activation("relu")
+            x_all_data = activation_layer(x_all_data)
+            x_pos_data1 = activation_layer(x_pos_data1)
+            x_pos_data2 = activation_layer(x_pos_data2)
 
-        # fc layers
         x_all_data = Flatten(name="flatten")(x_all_data)
-        x_all_data = Dense(1024, activation="relu", name="fc1")(x_all_data)
-        x_all_data = Dense(1024, activation="relu", name="fc2")(x_all_data)
-        prob = Dense(1, activation="sigmoid",
-                kernel_regularizer=regularizers.l2(self.reg_coef),
-                name="prob")(x_all_data)
+        for i in xrange(2):
+            # fc layers
+            x_all_data = Dense(1024,
+                    kernel_regularizer=regularizers.l2(self.reg_coef),
+                    name="fc" + str(i+1))(x_all_data)
+            # BN
+            bn_layer = BatchNormalization()
+            x_all_data = bn_layer(x_all_data)
+            # relu
+            activation_layer = Activation("relu")
+            x_all_data = activation_layer(x_all_data)
+
+        # output
+        x_all_data = Dense(1, kernel_initializer="uniform")(x_all_data)
+        x_all_data = BatchNormalization()(x_all_data)
+        prob = Activation("sigmoid", name="prob")(x_all_data)
         
         outputs.append(prob)
         losses.append(binary_crossentropy)
@@ -113,10 +134,10 @@ class TsNet:
         self.model = Model(inputs=[input_data, pos_data1, pos_data2],
                 outputs=outputs)
 #        optimizer = optimizers.Adam(lr=self.lr, decay=1e-6)
-        global_step = tf.Variable(0, name="global_step", trainable=False)
-        lr = tf.train.exponential_decay(self.lr, global_step,
+        self.global_step = tf.Variable(0, name="global_step", trainable=False)
+        lr = tf.train.exponential_decay(self.init_lr, self.global_step,
            DECAY_STEPS, DECAY_RATE, staircase=True)
-        optimizer = optimizers.TFOptimizer(tf.train.AdamOptimizer(self.lr))
+        optimizer = optimizers.TFOptimizer(tf.train.AdamOptimizer(lr))
 
         self.model.compile(optimizer=optimizer,
                 loss=losses, loss_weights=loss_weights)
@@ -130,6 +151,7 @@ class TsNet:
     def get_rand_batch(self, data, labels):
         data_size, seq_len, _ = data.shape
         pos_label_idx = np.where(labels==1)[0]
+        logger.info("pos_label_idx={}".format(pos_label_idx))
         num_pos_samples = np.sum(labels==1)
         num_neg_samples = np.sum(labels==0)
         pos_sampling_weight = 1.0
@@ -150,6 +172,7 @@ class TsNet:
             if np.intersect1d(sample_idx, pos_label_idx).size == 0:
                 sample_idx[0] = pos_label_idx[np.random.randint(0,
                     pos_label_idx.size)]
+
             batch_label = labels[sample_idx]
             assert np.any(batch_label==1)
 
@@ -158,14 +181,15 @@ class TsNet:
                     np.random.choice(pos_label_idx, self.batch_size), -1)
             pos_idx2 = np.expand_dims(
                     np.random.choice(pos_label_idx, self.batch_size), -1)
-            rand_start = np.random.randint(0, seq_len - self.win_size,
+            rand_start = np.random.randint(0, seq_len - self.win_size + 1,
                     self.batch_size)
-            rand_end = rand_start + self.win_size
-            seq_slice = np.array([np.arange(rand_start[i], rand_end[i])
-                for i in xrange(self.batch_size)])
+            seq_slice = np.array([np.arange(ss, ss + self.win_size)
+                for ss in rand_start])
             batch_data = data[sample_idx, seq_slice]
             batch_pos_data1 = data[pos_idx1, seq_slice]
             batch_pos_data2 = data[pos_idx2, seq_slice]
+#            for i, ss in enumerate(rand_start):
+#                assert np.all(batch_data[i] == data[sample_idx[i, 0]][ss:ss+self.win_size]), "i={}, sample_idx={}, ss={}".format(i, sample_idx[i, 0], ss)
             yield ([batch_data, batch_pos_data1, batch_pos_data2],
                     [batch_label]*self.num_outputs)
         logger.info("data_fetcher abort") 
@@ -181,37 +205,56 @@ class TsNet:
     def train(self, train_data, train_label, valid_data, valid_label,
             logdir, modelpath, verbose=0):
 
-        samples_per_epoch = np.prod(train_data.shape[:-1])
-        samples_per_batch = self.win_size * self.batch_size
-        steps_per_epoch =  samples_per_epoch / samples_per_batch
+#        samples_per_epoch = np.prod(train_data.shape[:-1])
+#        samples_per_batch = self.win_size * self.batch_size
+#        steps_per_epoch =  samples_per_epoch / samples_per_batch
+        steps_per_epoch = 400
         validation_steps = valid_data.shape[0]
         logger.info("max_epochs={}, steps_per_epoch={}, "\
                 "validation_steps={}".format(
                     self.max_epochs, steps_per_epoch, validation_steps))
 
-        self.best_f1 = 0.0
         self.best_acc = 0.0
-        self.best_rec = 0.0 
+        self.best_f1 = 0.0
 
-        def test_on_valid(epoch, logs):
-            probs = np.zeros(valid_label.size)
+        def test_on_train(epoch, logs):
+            dd_test = train_data
+            ll_test = train_label
+            probs = np.zeros(ll_test.size)
             for i, label in enumerate(valid_label):
-                batch_data = util.reshape(valid_data[i], self.win_size)
+                batch_data = util.reshape(dd_test[i], self.win_size)
                 preds_per_ts = self.model.predict_on_batch([batch_data] * 3)
                 probs[i] = preds_per_ts[-1].mean()
-            preds = probs>0.5
-            f1 = metrics.f1_score(valid_label, preds)
-            acc = metrics.precision_score(valid_label, preds)
-            rec = metrics.recall_score(valid_label, preds)
+            preds = np.array(probs>=0.5, dtype=int)
+            acc = metrics.accuracy_score(ll_test, preds)
+            f1 = metrics.f1_score(ll_test, preds)
+            prec = metrics.precision_score(ll_test, preds)
+            rec = metrics.recall_score(ll_test, preds)
             logger.info("------------")
-            logger.info("Epoch={}, val_f1={}, val_acc={}, val_recall={}".format(
-                epoch, f1, acc, rec))
-            if f1>self.best_f1 or\
-                    (f1==self.best_f1 and acc>self.best_acc) or\
-                    (f1==self.best_f1 and acc==self.best_acc and rec>=self.best_rec):
-                self.best_f1 = f1
+            logger.info("Epoch={}, train_acc={}, "\
+                    "train_f1={}, train_prec={}, train_recall={}".format(
+                        epoch, acc, f1, prec, rec))
+
+        def test_on_valid(epoch, logs):
+            dd_test = valid_data
+            ll_test = valid_label
+            probs = np.zeros(ll_test.size)
+            for i, label in enumerate(valid_label):
+                batch_data = util.reshape(dd_test[i], self.win_size)
+                preds_per_ts = self.model.predict_on_batch([batch_data] * 3)
+                probs[i] = preds_per_ts[-1].mean()
+            preds = np.array(probs>=0.5, dtype=int)
+            acc = metrics.accuracy_score(ll_test, preds)
+            f1 = metrics.f1_score(ll_test, preds)
+            prec = metrics.precision_score(ll_test, preds)
+            rec = metrics.recall_score(ll_test, preds)
+            logger.info("------------")
+            logger.info("Epoch={}, val_acc={}, "\
+                    "val_f1={}, val_prec={}, val_recall={}".format(
+                        epoch, acc, f1, prec, rec))
+            if acc>self.best_acc or (acc==self.best_acc and f1>=self.best_f1):
                 self.best_acc = acc
-                self.best_rec = rec
+                self.best_f1 = f1
                 logger.info("Best scores updated!")
                 logger.info("Saving checkpoint ...")
                 self.model.save_weights(modelpath)
@@ -223,6 +266,9 @@ class TsNet:
             validation_data=self.get_ordered_batch(valid_data, valid_label),
             validation_steps=validation_steps,
             callbacks=[
+                keras.callbacks.LambdaCallback(
+                    on_epoch_end=test_on_train)
+                ,
                 keras.callbacks.LambdaCallback(
                     on_epoch_end=test_on_valid)
                 ],
@@ -242,21 +288,3 @@ class TsNet:
             preds_per_ts = self.model.predict_on_batch([test_data] * 3)
             preds[i] = preds_per_ts[-1].mean()
         return preds
-
-
-class MeanStdCal:
-
-    def __init__(self, seq_len, num_ch):
-        input_data = Input(shape=(seq_len, num_ch), dtype="float32")
-        data_mean = Lambda(lambda x: K.mean(x, axis=1))(input_data)
-        data_std = Lambda(lambda x: K.std(x, axis=1))(input_data)
-        self.mm = Model(input_data, [data_mean, data_std])
-
-    def get_mean_std(self, data):
-        data_mean, data_std = self.mm.predict(data)
-        assert not np.any(np.isnan(data_mean))
-        assert not np.any(np.isnan(data_std))
-        assert not np.any(np.isinf(data_mean))
-        assert not np.any(np.isinf(data_std))
-        return data_mean, data_std
-

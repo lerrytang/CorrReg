@@ -1,6 +1,6 @@
 import pickle
 import util
-from ts_net import TsNet, MeanStdCal
+from ts_net import TsNet
 import argparse
 import time
 import pandas as pd
@@ -44,10 +44,6 @@ def main(args):
     logger.info("num_seq={}, seq_len={}, num_ch={}".format(
         num_seq, seq_len, num_ch))
 
-    # calculate mean and std
-    mm = MeanStdCal(seq_len, num_ch)
-    data_mean, data_std = mm.get_mean_std(data)
-
     # CV
     for fold_i in xrange(args.n_folds):
         logger.info("<fold {}>".format(fold_i))
@@ -59,13 +55,24 @@ def main(args):
         logger.info(valid_indice)
         logger.info("pos% in train: {}".format(labels[train_indice].mean()))
         logger.info("pos% in valid: {}".format(labels[valid_indice].mean()))
-        train_mean = np.mean(data_mean[train_indice], axis=0)
-        train_std = np.mean(data_std[train_indice], axis=0)
+    
+        # calculate mean and std
+        npzdir = os.path.join(args.train_mean_std_dir, args.target_obj)
+        filename = "train_mean_std_fold{}.npz".format(fold_i)
+        if os.path.exists(os.path.join(npzdir, filename)):
+            npzfile = np.load(os.path.join(npzdir, filename))
+            train_mean = npzfile["train_mean"]
+            train_std = npzfile["train_std"]
+        else:
+            tmp = data[train_indice].reshape([-1, num_ch])
+            train_mean = np.mean(tmp, axis=0)
+            train_std = np.std(tmp, axis=0)
         logger.info("train_mean.shape={}".format(train_mean.shape))
         logger.info("train_mean={}".format(train_mean))
         logger.info("train_std.shape={}".format(train_std.shape))
         logger.info("train_std={}".format(train_std))
-    
+        np.savez(os.path.join(logdir, filename))
+
         # build net
         logger.info("Build model")
         model = TsNet(args, train_mean, train_std, num_ch)
@@ -106,6 +113,8 @@ if __name__ == "__main__":
             help="whether to rebalance dataset")
     parser.add_argument("--data_dir", default="../data",
             help="directory of data")
+    parser.add_argument("--train_mean_std_dir", default="../train_mean_std_dir",
+            help="directory of mean and std files")
     parser.add_argument("--logdir", default="./log",
             help="directory to store logs")
     parser.add_argument("--corr_coef_pp", default=0.0, type=float,
@@ -114,7 +123,7 @@ if __name__ == "__main__":
             help="ratio to downsample data")
     parser.add_argument("--win_size", default=4000, type=int,
             help="size of sliding window")
-    parser.add_argument("--batch_size", default=32, type=int,
+    parser.add_argument("--batch_size", default=64, type=int,
             help="training batch size")
     parser.add_argument("--max_epochs", default=50, type=int,
             help="maximum number of training iterations")
@@ -128,7 +137,7 @@ if __name__ == "__main__":
             help="L2 regularization strength")
     parser.add_argument("--dropout_prob", default=0.0, type=float,
             help="dropout probability")
-    parser.add_argument("--init_lr", default=0.0002, type=float,
+    parser.add_argument("--init_lr", default=0.001, type=float,
             help="initial learning rate")
     parser.add_argument("target_obj",
             help="must be in the set (Dog_1, Dog_2, Dog_3,"
