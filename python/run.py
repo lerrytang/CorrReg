@@ -60,10 +60,12 @@ def main(args):
         npzdir = os.path.join(args.train_mean_std_dir, args.target_obj)
         filename = "train_mean_std_fold{}.npz".format(fold_i)
         if os.path.exists(os.path.join(npzdir, filename)):
+            logger.info("Loading {} ...".format(filename))
             npzfile = np.load(os.path.join(npzdir, filename))
             train_mean = npzfile["train_mean"]
             train_std = npzfile["train_std"]
         else:
+            logger.info("Calculating mean and std ...")
             tmp = data[train_indice].reshape([-1, num_ch])
             train_mean = np.mean(tmp, axis=0)
             train_std = np.std(tmp, axis=0)
