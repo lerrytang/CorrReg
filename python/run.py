@@ -81,11 +81,14 @@ def main(args):
         model.build_model(logdir=logdir if fold_i==0 else None)
     
         # train
-        modelname = "bestmodel_fold" + str(fold_i) + ".h5"
-        modelpath = os.path.join(logdir, "model", modelname)
+        weightname = "bestmodel_fold" + str(fold_i) + ".h5"
+        modelname = "finalmodel_fold" + str(fold_i) + ".h5"
+        modeldir = os.path.join(logdir, "model")
+        weightpath = os.path.join(modeldir, weightname)
+        modelpath = os.path.join(modeldir, modelname)
         train_hist = model.train(data[train_indice], labels[train_indice],
                 data[valid_indice], labels[valid_indice],
-                logdir, modelpath, args.verbose)
+                logdir, modelpath, weightpath, args.verbose)
     
         # log training history
         hist_file = os.path.join(logdir, "hist_fold"+str(fold_i)+".pkl")
@@ -113,6 +116,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_rebalance", action="store_true", default=False,
             help="whether to rebalance dataset")
+    parser.add_argument("--rand_scale_sampling", action="store_true", default=False,
+            help="whether to random sampling with different scales")
     parser.add_argument("--data_dir", default="../data",
             help="directory of data")
     parser.add_argument("--train_mean_std_dir", default="../train_mean_std_dir",
@@ -127,7 +132,7 @@ if __name__ == "__main__":
             help="size of sliding window")
     parser.add_argument("--batch_size", default=64, type=int,
             help="training batch size")
-    parser.add_argument("--max_epochs", default=50, type=int,
+    parser.add_argument("--max_epochs", default=20, type=int,
             help="maximum number of training iterations")
     parser.add_argument("--n_folds", default=3, type=int,
             help="training batch size")
@@ -137,8 +142,6 @@ if __name__ == "__main__":
             help="verbose for training process")
     parser.add_argument("--reg_coef", default=0.0, type=float,
             help="L2 regularization strength")
-    parser.add_argument("--dropout_prob", default=0.0, type=float,
-            help="dropout probability")
     parser.add_argument("--init_lr", default=0.001, type=float,
             help="initial learning rate")
     parser.add_argument("target_obj",

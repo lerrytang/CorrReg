@@ -16,7 +16,6 @@ def create_log(log_dir, target_obj):
     logdir = os.path.join(log_dir, target_obj + "_" + current_time)
     if not os.path.exists(logdir):
         os.mkdir(logdir)
-    # create model dir for this run
     modeldir = os.path.join(logdir, "model")
     if not os.path.exists(modeldir):
         os.mkdir(modeldir)
@@ -63,11 +62,6 @@ def load_data(filename, datatype, downsample=0):
     return data
 
 
-def load_data_for_test(filename, win_size, downsample=0):
-    data = load_data(filename, "test", downsample)
-    return reshape(data, win_size)
-
-
 def load_all_data(dirname, datatype, downsample=0):
     '''
     Load all data of datatype from a directory
@@ -94,7 +88,6 @@ def load_all_data(dirname, datatype, downsample=0):
 
 
 def load_train_data(target_data_dir, downsample):
-    # load data
     data_files = os.listdir(target_data_dir)
     pre_data_files = np.sort([f for f in data_files if "preictal" in f])
     logger.info("#preictal_files = {}".format(pre_data_files.size))
@@ -104,7 +97,6 @@ def load_train_data(target_data_dir, downsample):
     logger.info("interictal_data.shape={}".format(pre_data.shape))
     int_data = load_all_data(target_data_dir, "interictal", downsample)
     logger.info("interictal_data.shape={}".format(int_data.shape))
-    # split
     labels = np.array([1] * pre_data_files.size + \
             [0] * int_data_files.size, dtype="uint8")
     data = np.concatenate([pre_data, int_data])
@@ -123,17 +115,31 @@ def split_to_folds(labels, n_folds=2):
 
 
 def reshape(data, win_size):
-    # reshape data
+    assert np.ndim(data)==2
     seq_len, num_ch = data.shape
     segs_per_ts = int(np.ceil(1.0 * seq_len / win_size))
+    logger.debug("seq_len={}, num_ch={}, segs_per_ts={}".format(
+        seq_len, num_ch, segs_per_ts))
     stride = int((seq_len - win_size) / (segs_per_ts - 1))
-    logger.debug("seq_len={}, num_ch={}, segs_per_ts={}, stride={}".format(
-        seq_len, num_ch, segs_per_ts, stride))
     start_idx = np.arange(0, seq_len - win_size + 1, stride)
-    assert start_idx.size == segs_per_ts
     slice_idx = np.array([np.arange(ss, ss + win_size) for ss in start_idx])
     reshaped_data = data[slice_idx]
-    # debug
-#    for i,s in enumerate(start_idx):
-#        assert np.all(data[s:s+win_size] == reshaped_data[i])
     return reshaped_data
+
+
+def reshape_scale(data, win_size, scale):
+    if np.ndim(data) < 3:
+        data = np.expand_dims(data, axis=0)
+    num_seq, seq_len, num_ch = data.shape
+    logger.debug("reshape_scale(): data.shape={}".format(data.shape))
+    if seq_len > win_size*scale:
+        def fn(ws):
+            return lambda x: reshape(x, ws)
+        reshape_fn = fn(win_size * scale)
+        res = np.concatenate(map(reshape_fn, data))
+    else:
+        res = data
+    if scale > 1:
+        res = np.mean(np.reshape(res, (-1, win_size, scale, num_ch)), axis=2)
+    logger.debug("res.shape={}".format(res.shape))
+    return res

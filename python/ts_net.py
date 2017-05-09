@@ -34,6 +34,11 @@ class TsNet:
         self.train_mean = train_mean
         self.train_std = train_std
         self.num_channel = num_channel
+        if args.rand_scale_sampling:
+            self.scales = [1, 2, 4]
+        else:
+            self.scales = [1,]
+        logger.info("rand_scales={}".format(self.scales))
 
     def build_model(self, logdir=None):
 
@@ -127,13 +132,14 @@ class TsNet:
         outputs.append(prob)
         losses.append(binary_crossentropy)
         loss_weights.append(1.0)
+        logger.info("loss_weights={}".format(loss_weights))
         
         self.num_outputs = len(outputs)
         logger.info(outputs)
         logger.info(loss_weights)
         self.model = Model(inputs=[input_data, pos_data1, pos_data2],
                 outputs=outputs)
-#        optimizer = optimizers.Adam(lr=self.lr, decay=1e-6)
+#        optimizer = optimizers.Adam(lr=self.init_lr, decay=1e-6)
         self.global_step = tf.Variable(0, name="global_step", trainable=False)
         lr = tf.train.exponential_decay(self.init_lr, self.global_step,
            DECAY_STEPS, DECAY_RATE, staircase=True)
@@ -149,7 +155,7 @@ class TsNet:
                     show_shapes=True)
 
     def get_rand_batch(self, data, labels):
-        data_size, seq_len, _ = data.shape
+        data_size, seq_len, num_ch = data.shape
         pos_label_idx = np.where(labels==1)[0]
         logger.info("pos_label_idx={}".format(pos_label_idx))
         num_pos_samples = np.sum(labels==1)
@@ -181,34 +187,60 @@ class TsNet:
                     np.random.choice(pos_label_idx, self.batch_size), -1)
             pos_idx2 = np.expand_dims(
                     np.random.choice(pos_label_idx, self.batch_size), -1)
-            rand_start = np.random.randint(0, seq_len - self.win_size + 1,
-                    self.batch_size)
-            seq_slice = np.array([np.arange(ss, ss + self.win_size)
-                for ss in rand_start])
-            batch_data = data[sample_idx, seq_slice]
-            batch_pos_data1 = data[pos_idx1, seq_slice]
-            batch_pos_data2 = data[pos_idx2, seq_slice]
-#            for i, ss in enumerate(rand_start):
-#                assert np.all(batch_data[i] == data[sample_idx[i, 0]][ss:ss+self.win_size]), "i={}, sample_idx={}, ss={}".format(i, sample_idx[i, 0], ss)
+
+            scale_list = np.random.choice(self.scales, self.batch_size)
+            logger.debug("scale_list={}".format(scale_list))
+            batch_data = np.zeros([self.batch_size, self.win_size,
+                self.num_channel])
+            batch_pos_data1 = np.zeros_like(batch_data)
+            batch_pos_data2 = np.zeros_like(batch_data)
+            uniq_scales = np.unique(scale_list)
+            for scale in uniq_scales:
+                sel_ix = np.where(scale_list==scale)[0]
+                logger.debug("sel_ix={}".format(sel_ix))
+                rand_start = np.random.randint(0,
+                        seq_len - self.win_size * scale + 1, sel_ix.size)
+                seq_slice = np.array([np.arange(ss, ss + self.win_size * scale)
+                    for ss in rand_start])
+                batch_data[sel_ix] = util.reshape_scale(
+                        data[sample_idx[sel_ix], seq_slice],
+                        self.win_size, scale)
+                batch_pos_data1[sel_ix] = util.reshape_scale(
+                        data[pos_idx1[sel_ix], seq_slice],
+                        self.win_size, scale)
+                batch_pos_data2[sel_ix] = util.reshape_scale(
+                        data[pos_idx2[sel_ix], seq_slice],
+                        self.win_size, scale)
+            sample_weights = np.asarray(scale_list)
+            sample_weights[batch_label==0] = 1
+            logger.debug("sample_weights={}".format(sample_weights))
             yield ([batch_data, batch_pos_data1, batch_pos_data2],
-                    [batch_label]*self.num_outputs)
+                    [batch_label]*self.num_outputs,
+                    [sample_weights]*self.num_outputs)
         logger.info("data_fetcher abort") 
 
-    def get_ordered_batch(self, data, labels):
-        data_size, seq_len, _ = data.shape
-        while True:
-            for i in xrange(data_size):
-                batch_data = util.reshape(data[i], self.win_size)
-                batch_label = np.ones(batch_data.shape[0]) * labels[i]
-                yield ([batch_data]*3, [batch_label]*self.num_outputs) 
+#    def get_ordered_batch(self, data, labels):
+#        data_size, seq_len, _ = data.shape
+#        while True:
+#            for i in xrange(data_size):
+#                batch_data = None
+#                for scale in self.scales:
+#                    tmp_data = util.reshape_scale(np.expand_dims(data[i],
+#                        axis=0), self.win_size, scale)
+#                    if batch_data is None:
+#                        batch_data = tmp_data
+#                    else:
+#                        batch_data = np.concatenate([batch_data, tmp_data])
+#                batch_label = np.ones(batch_data.shape[0]) * labels[i]
+#                yield ([batch_data]*3, [batch_label]*self.num_outputs) 
     
     def train(self, train_data, train_label, valid_data, valid_label,
-            logdir, modelpath, verbose=0):
+            logdir, modelpath, weightpath, verbose=0):
 
 #        samples_per_epoch = np.prod(train_data.shape[:-1])
 #        samples_per_batch = self.win_size * self.batch_size
 #        steps_per_epoch =  samples_per_epoch / samples_per_batch
-        steps_per_epoch = 400
+        steps_per_epoch = 1000
         validation_steps = valid_data.shape[0]
         logger.info("max_epochs={}, steps_per_epoch={}, "\
                 "validation_steps={}".format(
@@ -217,54 +249,55 @@ class TsNet:
         self.best_acc = 0.0
         self.best_f1 = 0.0
 
-        def test_on_train(epoch, logs):
-            dd_test = train_data
-            ll_test = train_label
-            probs = np.zeros(ll_test.size)
-            for i, label in enumerate(valid_label):
-                batch_data = util.reshape(dd_test[i], self.win_size)
-                preds_per_ts = self.model.predict_on_batch([batch_data] * 3)
-                probs[i] = preds_per_ts[-1].mean()
+        def test(dd_test, ll_test):
+            test_size = ll_test.size
+            probs = np.zeros(test_size * len(self.scales))
+            for i in xrange(ll_test.size):
+                for j, scale in enumerate(self.scales):
+                    batch_data = util.reshape_scale(dd_test[i],
+                            self.win_size, scale)
+                    preds_per_ts = self.model.predict_on_batch([batch_data] * 3)
+                    n_preds = preds_per_ts[-1].size
+                    n_best = max(1, int(0.1 * n_preds))  # top 10%
+                    probs[j * test_size + i] = \
+                            np.sort(preds_per_ts[-1])[-n_best:].mean()
+            probs = np.mean(np.reshape(probs, (len(self.scales), test_size)),
+                    axis=0)
             preds = np.array(probs>=0.5, dtype=int)
             acc = metrics.accuracy_score(ll_test, preds)
             f1 = metrics.f1_score(ll_test, preds)
             prec = metrics.precision_score(ll_test, preds)
             rec = metrics.recall_score(ll_test, preds)
+            return acc, f1, prec, rec
+
+        def test_on_train(epoch, logs):
+            rand_ix = np.random.choice(train_label.size,
+                    valid_label.size, replace=False)
+            acc, f1, prec, rec = test(train_data[rand_ix], train_label[rand_ix])
             logger.info("------------")
             logger.info("Epoch={}, train_acc={}, "\
                     "train_f1={}, train_prec={}, train_recall={}".format(
                         epoch, acc, f1, prec, rec))
 
         def test_on_valid(epoch, logs):
-            dd_test = valid_data
-            ll_test = valid_label
-            probs = np.zeros(ll_test.size)
-            for i, label in enumerate(valid_label):
-                batch_data = util.reshape(dd_test[i], self.win_size)
-                preds_per_ts = self.model.predict_on_batch([batch_data] * 3)
-                probs[i] = preds_per_ts[-1].mean()
-            preds = np.array(probs>=0.5, dtype=int)
-            acc = metrics.accuracy_score(ll_test, preds)
-            f1 = metrics.f1_score(ll_test, preds)
-            prec = metrics.precision_score(ll_test, preds)
-            rec = metrics.recall_score(ll_test, preds)
+            acc, f1, prec, rec = test(valid_data, valid_label)
             logger.info("------------")
             logger.info("Epoch={}, val_acc={}, "\
                     "val_f1={}, val_prec={}, val_recall={}".format(
                         epoch, acc, f1, prec, rec))
-            if acc>self.best_acc or (acc==self.best_acc and f1>=self.best_f1):
+            if epoch>=5 and acc>self.best_acc or (acc==self.best_acc and f1>=self.best_f1):
                 self.best_acc = acc
                 self.best_f1 = f1
                 logger.info("Best scores updated!")
                 logger.info("Saving checkpoint ...")
-                self.model.save_weights(modelpath)
+                self.model.save_weights(weightpath)
                 logger.info("Model saved.")
 
         train_hist = self.model.fit_generator(
             generator=self.get_rand_batch(train_data, train_label),
             steps_per_epoch=steps_per_epoch,
-            validation_data=self.get_ordered_batch(valid_data, valid_label),
-            validation_steps=validation_steps,
+#            validation_data=self.get_ordered_batch(valid_data, valid_label),
+#            validation_steps=validation_steps,
             callbacks=[
                 keras.callbacks.LambdaCallback(
                     on_epoch_end=test_on_train)
@@ -275,16 +308,29 @@ class TsNet:
             verbose=verbose,
             epochs=self.max_epochs
             )
+
+        logger.info("Saving checkpoint ...")
+        self.model.save_weights(modelpath)
+        logger.info("Model saved.")
         return train_hist
 
     def test_on_data(self, test_data_files):
         """Test model performance on the test set"""
-        preds = np.zeros(test_data_files.size)
+        test_size = test_data_files.size
+        probs = np.zeros(test_size * len(self.scales))
         for i, f in enumerate(test_data_files):
-            test_data = util.load_data_for_test(
+            test_data = util.load_data(
                     os.path.join(self.test_data_dir, f),
-                    self.win_size,
-                    self.downsample)
-            preds_per_ts = self.model.predict_on_batch([test_data] * 3)
-            preds[i] = preds_per_ts[-1].mean()
-        return preds
+                    "test", self.downsample)
+            for j, scale in enumerate(self.scales):
+                batch_data = util.reshape_scale(test_data,
+                        self.win_size, scale)
+                preds_per_ts = self.model.predict_on_batch([batch_data] * 3)
+                n_preds = preds_per_ts[-1].size
+                n_best = max(1, int(0.1 * n_preds))  # top 10%
+                probs[j * test_size + i] = \
+                        np.sort(preds_per_ts[-1])[-n_best:].mean()
+#                probs[j * test_size + i] = preds_per_ts[-1].mean()
+        probs = np.mean(np.reshape(probs, (len(self.scales), test_size)),
+                axis=0)
+        return probs
