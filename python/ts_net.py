@@ -40,6 +40,8 @@ class TsNet:
             self.scales = [1,]
         logger.info("rand_scales={}".format(self.scales))
 
+        self.weights_hist = []
+
     def build_model(self, logdir=None):
 
         def corr_loss_func(y_true, y_pred):
@@ -154,6 +156,17 @@ class TsNet:
                     to_file=os.path.join(logdir, 'model.png'),
                     show_shapes=True)
 
+    def weights_squared_sum(self):
+        weights_sum = 0
+        for ll in self.model.layers:
+            ll_name = ll.name
+            if ll_name[:2] in ["co", "de", "fc"] and ll_name[:3]!="cor":
+                ws = ll.get_weights()
+                for w in ws:
+                    weights_sum += np.sum(w**2)
+        self.weights_hist.append(weights_sum)
+        return weights_sum
+
     def get_rand_batch(self, data, labels):
         data_size, seq_len, num_ch = data.shape
         pos_label_idx = np.where(labels==1)[0]
@@ -212,34 +225,30 @@ class TsNet:
                         data[pos_idx2[sel_ix], seq_slice],
                         self.win_size, scale)
             sample_weights = np.asarray(scale_list)
-            sample_weights[batch_label==0] = 1
             logger.debug("sample_weights={}".format(sample_weights))
             yield ([batch_data, batch_pos_data1, batch_pos_data2],
                     [batch_label]*self.num_outputs,
                     [sample_weights]*self.num_outputs)
         logger.info("data_fetcher abort") 
 
-#    def get_ordered_batch(self, data, labels):
-#        data_size, seq_len, _ = data.shape
-#        while True:
-#            for i in xrange(data_size):
-#                batch_data = None
-#                for scale in self.scales:
-#                    tmp_data = util.reshape_scale(np.expand_dims(data[i],
-#                        axis=0), self.win_size, scale)
-#                    if batch_data is None:
-#                        batch_data = tmp_data
-#                    else:
-#                        batch_data = np.concatenate([batch_data, tmp_data])
-#                batch_label = np.ones(batch_data.shape[0]) * labels[i]
-#                yield ([batch_data]*3, [batch_label]*self.num_outputs) 
+    def get_ordered_batch(self, data, labels):
+        data_size, seq_len, _ = data.shape
+        while True:
+            for i in xrange(data_size):
+                batch_data = None
+                for scale in self.scales:
+                    tmp_data = util.reshape_scale(np.expand_dims(data[i],
+                        axis=0), self.win_size, scale)
+                    if batch_data is None:
+                        batch_data = tmp_data
+                    else:
+                        batch_data = np.concatenate([batch_data, tmp_data])
+                batch_label = np.ones(batch_data.shape[0]) * labels[i]
+                yield ([batch_data]*3, [batch_label]*self.num_outputs) 
     
     def train(self, train_data, train_label, valid_data, valid_label,
-            logdir, modelpath, weightpath, verbose=0):
+            logdir, bestmodelpath, finalmodelpath, verbose=0):
 
-#        samples_per_epoch = np.prod(train_data.shape[:-1])
-#        samples_per_batch = self.win_size * self.batch_size
-#        steps_per_epoch =  samples_per_epoch / samples_per_batch
         steps_per_epoch = 1000
         validation_steps = valid_data.shape[0]
         logger.info("max_epochs={}, steps_per_epoch={}, "\
@@ -257,10 +266,7 @@ class TsNet:
                     batch_data = util.reshape_scale(dd_test[i],
                             self.win_size, scale)
                     preds_per_ts = self.model.predict_on_batch([batch_data] * 3)
-                    n_preds = preds_per_ts[-1].size
-                    n_best = max(1, int(0.1 * n_preds))  # top 10%
-                    probs[j * test_size + i] = \
-                            np.sort(preds_per_ts[-1])[-n_best:].mean()
+                    probs[j * test_size + i] = preds_per_ts[-1].mean()
             probs = np.mean(np.reshape(probs, (len(self.scales), test_size)),
                     axis=0)
             preds = np.array(probs>=0.5, dtype=int)
@@ -275,29 +281,33 @@ class TsNet:
                     valid_label.size, replace=False)
             acc, f1, prec, rec = test(train_data[rand_ix], train_label[rand_ix])
             logger.info("------------")
-            logger.info("Epoch={}, train_acc={}, "\
+            logger.info("Epoch={}, entropy_loss={}, train_acc={}, "\
                     "train_f1={}, train_prec={}, train_recall={}".format(
-                        epoch, acc, f1, prec, rec))
+                        epoch, logs["prob_loss"], acc, f1, prec, rec))
+            logger.info("Epoch={}, weights_squared_sum={}".format(
+                epoch, self.weights_squared_sum()))
 
         def test_on_valid(epoch, logs):
             acc, f1, prec, rec = test(valid_data, valid_label)
             logger.info("------------")
-            logger.info("Epoch={}, val_acc={}, "\
+            logger.info("Epoch={}, entropy_loss={}, val_acc={}, "\
                     "val_f1={}, val_prec={}, val_recall={}".format(
-                        epoch, acc, f1, prec, rec))
-            if epoch>=5 and acc>self.best_acc or (acc==self.best_acc and f1>=self.best_f1):
+                        epoch, logs["val_prob_loss"], acc, f1, prec, rec))
+            # update best model
+            if epoch>=(self.max_epochs/3) and acc>self.best_acc or \
+                    (acc==self.best_acc and f1>=self.best_f1):
                 self.best_acc = acc
                 self.best_f1 = f1
                 logger.info("Best scores updated!")
-                logger.info("Saving checkpoint ...")
-                self.model.save_weights(weightpath)
+                logger.info("Updating best model ...")
+                self.model.save_weights(bestmodelpath)
                 logger.info("Model saved.")
 
         train_hist = self.model.fit_generator(
             generator=self.get_rand_batch(train_data, train_label),
             steps_per_epoch=steps_per_epoch,
-#            validation_data=self.get_ordered_batch(valid_data, valid_label),
-#            validation_steps=validation_steps,
+            validation_data=self.get_ordered_batch(valid_data, valid_label),
+            validation_steps=validation_steps,
             callbacks=[
                 keras.callbacks.LambdaCallback(
                     on_epoch_end=test_on_train)
@@ -309,9 +319,11 @@ class TsNet:
             epochs=self.max_epochs
             )
 
-        logger.info("Saving checkpoint ...")
-        self.model.save_weights(modelpath)
+        logger.info("Saving final model ...")
+        self.model.save_weights(finalmodelpath)
         logger.info("Model saved.")
+
+        train_hist.history["weights_squared_sum"] = self.weights_hist
         return train_hist
 
     def test_on_data(self, test_data_files):
@@ -326,11 +338,7 @@ class TsNet:
                 batch_data = util.reshape_scale(test_data,
                         self.win_size, scale)
                 preds_per_ts = self.model.predict_on_batch([batch_data] * 3)
-                n_preds = preds_per_ts[-1].size
-                n_best = max(1, int(0.1 * n_preds))  # top 10%
-                probs[j * test_size + i] = \
-                        np.sort(preds_per_ts[-1])[-n_best:].mean()
-#                probs[j * test_size + i] = preds_per_ts[-1].mean()
+                probs[j * test_size + i] = preds_per_ts[-1].mean()
         probs = np.mean(np.reshape(probs, (len(self.scales), test_size)),
                 axis=0)
         return probs

@@ -81,14 +81,12 @@ def main(args):
         model.build_model(logdir=logdir if fold_i==0 else None)
     
         # train
-        weightname = "bestmodel_fold" + str(fold_i) + ".h5"
-        modelname = "finalmodel_fold" + str(fold_i) + ".h5"
         modeldir = os.path.join(logdir, "model")
-        weightpath = os.path.join(modeldir, weightname)
-        modelpath = os.path.join(modeldir, modelname)
+        bestmodelpath = os.path.join(modeldir, "bestmodel_fold" + str(fold_i) + ".h5")
+        finalmodelpath = os.path.join(modeldir, "finalmodel_fold" + str(fold_i) + ".h5")
         train_hist = model.train(data[train_indice], labels[train_indice],
                 data[valid_indice], labels[valid_indice],
-                logdir, modelpath, weightpath, args.verbose)
+                logdir, bestmodelpath, finalmodelpath, args.verbose)
     
         # log training history
         hist_file = os.path.join(logdir, "hist_fold"+str(fold_i)+".pkl")
@@ -96,8 +94,12 @@ def main(args):
             pickle.dump(train_hist.history, f)
     
         # load test data
-        logger.info("Load model to test")
-        model.model.load_weights(os.path.join(logdir, "model", modelname))
+        if args.use_final_model:
+            logger.info("Load final model to test")
+            model.model.load_weights(finalmodelpath)
+        else:
+            logger.info("Load best model to test")
+            model.model.load_weights(bestmodelpath)
            
         # test
         data_files = os.listdir(target_data_dir)
@@ -114,6 +116,8 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--use_final_model", action="store_true", default=False,
+            help="whether to test with the model trained until max_epochs")
     parser.add_argument("--data_rebalance", action="store_true", default=False,
             help="whether to rebalance dataset")
     parser.add_argument("--rand_scale_sampling", action="store_true", default=False,
