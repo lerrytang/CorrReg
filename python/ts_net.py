@@ -292,8 +292,7 @@ class TsNet:
                     "val_f1={}, val_prec={}, val_recall={}".format(
                         epoch, acc, f1, prec, rec))
             # update best model
-            if epoch>=(self.max_epochs/3) and acc>self.best_acc or \
-                    (acc==self.best_acc and f1>=self.best_f1):
+            if acc>self.best_acc or (acc==self.best_acc and f1>=self.best_f1):
                 self.best_acc = acc
                 self.best_f1 = f1
                 logger.info("Best scores updated!")
