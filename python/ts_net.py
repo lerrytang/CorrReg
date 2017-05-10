@@ -208,44 +208,42 @@ class TsNet:
             batch_pos_data1 = np.zeros_like(batch_data)
             batch_pos_data2 = np.zeros_like(batch_data)
             uniq_scales = np.unique(scale_list)
-            for scale in uniq_scales:
+            sample_weights = np.ones(self.batch_size)
+            for w, scale in enumerate(uniq_scales):
                 sel_ix = np.where(scale_list==scale)[0]
-                logger.debug("sel_ix={}".format(sel_ix))
+                sample_weights[sel_ix] = w+1
                 rand_start = np.random.randint(0,
                         seq_len - self.win_size * scale + 1, sel_ix.size)
-                seq_slice = np.array([np.arange(ss, ss + self.win_size * scale)
+                seq_slice = np.array([np.arange(ss,
+                    ss + self.win_size * scale, scale)
                     for ss in rand_start])
-                batch_data[sel_ix] = util.reshape_scale(
-                        data[sample_idx[sel_ix], seq_slice],
-                        self.win_size, scale)
-                batch_pos_data1[sel_ix] = util.reshape_scale(
-                        data[pos_idx1[sel_ix], seq_slice],
-                        self.win_size, scale)
-                batch_pos_data2[sel_ix] = util.reshape_scale(
-                        data[pos_idx2[sel_ix], seq_slice],
-                        self.win_size, scale)
-            sample_weights = np.asarray(scale_list)
+                batch_data[sel_ix] = data[sample_idx[sel_ix], seq_slice]
+                batch_pos_data1[sel_ix] = data[pos_idx1[sel_ix], seq_slice]
+                batch_pos_data2[sel_ix] = data[pos_idx2[sel_ix], seq_slice]
             logger.debug("sample_weights={}".format(sample_weights))
             yield ([batch_data, batch_pos_data1, batch_pos_data2],
                     [batch_label]*self.num_outputs,
                     [sample_weights]*self.num_outputs)
         logger.info("data_fetcher abort") 
 
-    def get_ordered_batch(self, data, labels):
-        data_size, seq_len, _ = data.shape
-        while True:
-            for i in xrange(data_size):
-                batch_data = None
-                for scale in self.scales:
-                    tmp_data = util.reshape_scale(np.expand_dims(data[i],
-                        axis=0), self.win_size, scale)
-                    if batch_data is None:
-                        batch_data = tmp_data
-                    else:
-                        batch_data = np.concatenate([batch_data, tmp_data])
-                batch_label = np.ones(batch_data.shape[0]) * labels[i]
-                yield ([batch_data]*3, [batch_label]*self.num_outputs) 
-    
+#    def get_ordered_batch(self, data, labels):
+#        data_size, seq_len, _ = data.shape
+#        while True:
+#            for i in xrange(data_size):
+#                batch_data = []
+#                batch_label = []
+#                sample_weights = []
+#                for w, scale in enumerate(self.scales):
+#                    tmp = util.reshape(data[i], self.win_size, scale)
+#                    batch_data.append(tmp)
+#                    batch_label.append(np.ones(tmp.shape[0]) * labels[i])
+#                    sample_weights.extend([w+1]*tmp.shape[0])
+#                batch_data = np.concatenate(batch_data)
+#                batch_label = np.concatenate(batch_label)
+#                sample_weights = np.asarray(sample_weights)
+#                yield ([batch_data]*3, [batch_label]*self.num_outputs,
+#                        [sample_weights]*self.num_outputs) 
+
     def train(self, train_data, train_label, valid_data, valid_label,
             logdir, bestmodelpath, finalmodelpath, verbose=0):
 
@@ -263,8 +261,7 @@ class TsNet:
             probs = np.zeros(test_size * len(self.scales))
             for i in xrange(ll_test.size):
                 for j, scale in enumerate(self.scales):
-                    batch_data = util.reshape_scale(dd_test[i],
-                            self.win_size, scale)
+                    batch_data = util.reshape(dd_test[i], self.win_size, scale)
                     preds_per_ts = self.model.predict_on_batch([batch_data] * 3)
                     probs[j * test_size + i] = preds_per_ts[-1].mean()
             probs = np.mean(np.reshape(probs, (len(self.scales), test_size)),
@@ -281,18 +278,19 @@ class TsNet:
                     valid_label.size, replace=False)
             acc, f1, prec, rec = test(train_data[rand_ix], train_label[rand_ix])
             logger.info("------------")
-            logger.info("Epoch={}, entropy_loss={}, train_acc={}, "\
+            logger.info("Epoch={}, entropy_loss={}, "\
+                    " weights_squared_sum={}".format(
+                        epoch, logs["prob_loss"], self.weights_squared_sum()))
+            logger.info("Epoch={}, train_acc={}, "\
                     "train_f1={}, train_prec={}, train_recall={}".format(
-                        epoch, logs["prob_loss"], acc, f1, prec, rec))
-            logger.info("Epoch={}, weights_squared_sum={}".format(
-                epoch, self.weights_squared_sum()))
+                        epoch, acc, f1, prec, rec))
 
         def test_on_valid(epoch, logs):
             acc, f1, prec, rec = test(valid_data, valid_label)
             logger.info("------------")
-            logger.info("Epoch={}, entropy_loss={}, val_acc={}, "\
+            logger.info("Epoch={}, val_acc={}, "\
                     "val_f1={}, val_prec={}, val_recall={}".format(
-                        epoch, logs["val_prob_loss"], acc, f1, prec, rec))
+                        epoch, acc, f1, prec, rec))
             # update best model
             if epoch>=(self.max_epochs/3) and acc>self.best_acc or \
                     (acc==self.best_acc and f1>=self.best_f1):
@@ -306,8 +304,8 @@ class TsNet:
         train_hist = self.model.fit_generator(
             generator=self.get_rand_batch(train_data, train_label),
             steps_per_epoch=steps_per_epoch,
-            validation_data=self.get_ordered_batch(valid_data, valid_label),
-            validation_steps=validation_steps,
+#            validation_data=self.get_ordered_batch(valid_data, valid_label),
+#            validation_steps=validation_steps,
             callbacks=[
                 keras.callbacks.LambdaCallback(
                     on_epoch_end=test_on_train)
@@ -335,7 +333,7 @@ class TsNet:
                     os.path.join(self.test_data_dir, f),
                     "test", self.downsample)
             for j, scale in enumerate(self.scales):
-                batch_data = util.reshape_scale(test_data,
+                batch_data = util.reshape(test_data,
                         self.win_size, scale)
                 preds_per_ts = self.model.predict_on_batch([batch_data] * 3)
                 probs[j * test_size + i] = preds_per_ts[-1].mean()

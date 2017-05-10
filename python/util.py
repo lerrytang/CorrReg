@@ -114,32 +114,17 @@ def split_to_folds(labels, n_folds=2):
     return train_sets, valid_sets
 
 
-def reshape(data, win_size):
+def reshape(data, win_size, skip=1):
     assert np.ndim(data)==2
     seq_len, num_ch = data.shape
-    segs_per_ts = int(np.ceil(1.0 * seq_len / win_size))
+    segs_per_ts = int(np.ceil(1.0 * seq_len / win_size * skip))
     logger.debug("seq_len={}, num_ch={}, segs_per_ts={}".format(
         seq_len, num_ch, segs_per_ts))
-    stride = int((seq_len - win_size) / (segs_per_ts - 1))
-    start_idx = np.arange(0, seq_len - win_size + 1, stride)
-    slice_idx = np.array([np.arange(ss, ss + win_size) for ss in start_idx])
+    stride = int((seq_len - win_size * skip) / (segs_per_ts - 1))
+    start_idx = np.arange(0, seq_len - win_size * skip + 1, stride)
+    slice_idx = np.array([np.arange(ss, ss + win_size * skip, skip)
+        for ss in start_idx])
     reshaped_data = data[slice_idx]
     return reshaped_data
 
 
-def reshape_scale(data, win_size, scale):
-    if np.ndim(data) < 3:
-        data = np.expand_dims(data, axis=0)
-    num_seq, seq_len, num_ch = data.shape
-    logger.debug("reshape_scale(): data.shape={}".format(data.shape))
-    if seq_len > win_size*scale:
-        def fn(ws):
-            return lambda x: reshape(x, ws)
-        reshape_fn = fn(win_size * scale)
-        res = np.concatenate(map(reshape_fn, data))
-    else:
-        res = data
-    if scale > 1:
-        res = np.mean(np.reshape(res, (-1, win_size, scale, num_ch)), axis=2)
-    logger.debug("res.shape={}".format(res.shape))
-    return res
