@@ -35,7 +35,7 @@ class TsNet:
         self.train_std = train_std
         self.num_channel = num_channel
         if args.rand_scale_sampling:
-            self.scales = [1, 2, 4]
+            self.scales = [1, 2]
         else:
             self.scales = [1,]
         logger.info("rand_scales={}".format(self.scales))
@@ -220,6 +220,7 @@ class TsNet:
                 batch_data[sel_ix] = data[sample_idx[sel_ix], seq_slice]
                 batch_pos_data1[sel_ix] = data[pos_idx1[sel_ix], seq_slice]
                 batch_pos_data2[sel_ix] = data[pos_idx2[sel_ix], seq_slice]
+            sample_weights[batch_label==0] = 1
             logger.debug("sample_weights={}".format(sample_weights))
             yield ([batch_data, batch_pos_data1, batch_pos_data2],
                     [batch_label]*self.num_outputs,
@@ -258,14 +259,14 @@ class TsNet:
 
         def test(dd_test, ll_test):
             test_size = ll_test.size
-            probs = np.zeros(test_size * len(self.scales))
+            probs = np.zeros(test_size)
+            probs_i = np.zeros_like(self.scales)
             for i in xrange(ll_test.size):
                 for j, scale in enumerate(self.scales):
                     batch_data = util.reshape(dd_test[i], self.win_size, scale)
                     preds_per_ts = self.model.predict_on_batch([batch_data] * 3)
-                    probs[j * test_size + i] = preds_per_ts[-1].mean()
-            probs = np.mean(np.reshape(probs, (len(self.scales), test_size)),
-                    axis=0)
+                    probs_i[j] = preds_per_ts[-1].mean()
+                probs[i] = np.mean(probs_i)
             preds = np.array(probs>=0.5, dtype=int)
             acc = metrics.accuracy_score(ll_test, preds)
             f1 = metrics.f1_score(ll_test, preds)
@@ -276,8 +277,9 @@ class TsNet:
         def test_on_train(epoch, logs):
             rand_ix = np.random.choice(train_label.size,
                     valid_label.size, replace=False)
-            acc, f1, prec, rec = test(train_data[rand_ix], train_label[rand_ix])
             logger.info("------------")
+            logger.info("Testing on training set ...")
+            acc, f1, prec, rec = test(train_data[rand_ix], train_label[rand_ix])
             logger.info("Epoch={}, entropy_loss={}, "\
                     " weights_squared_sum={}".format(
                         epoch, logs["prob_loss"], self.weights_squared_sum()))
@@ -286,6 +288,7 @@ class TsNet:
                         epoch, acc, f1, prec, rec))
 
         def test_on_valid(epoch, logs):
+            logger.info("Testing on validation set ...")
             acc, f1, prec, rec = test(valid_data, valid_label)
             logger.info("------------")
             logger.info("Epoch={}, val_acc={}, "\
