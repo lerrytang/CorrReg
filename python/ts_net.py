@@ -202,7 +202,6 @@ class TsNet:
                     np.random.choice(pos_label_idx, self.batch_size), -1)
 
             scale_list = np.random.choice(self.scales, self.batch_size)
-            logger.debug("scale_list={}".format(scale_list))
             batch_data = np.zeros([self.batch_size, self.win_size,
                 self.num_channel])
             batch_pos_data1 = np.zeros_like(batch_data)
@@ -221,7 +220,9 @@ class TsNet:
                 batch_pos_data1[sel_ix] = data[pos_idx1[sel_ix], seq_slice]
                 batch_pos_data2[sel_ix] = data[pos_idx2[sel_ix], seq_slice]
             sample_weights[batch_label==0] = 1
-            logger.debug("sample_weights={}".format(sample_weights))
+#            logger.info("batch_label={}".format(batch_label))
+#            logger.info("scale_list ={}".format(scale_list))
+#            logger.info("sample_weights={}".format(sample_weights))
             yield ([batch_data, batch_pos_data1, batch_pos_data2],
                     [batch_label]*self.num_outputs,
                     [sample_weights]*self.num_outputs)
@@ -259,8 +260,8 @@ class TsNet:
 
         def test(dd_test, ll_test):
             test_size = ll_test.size
-            probs = np.zeros(test_size)
-            probs_i = np.zeros_like(self.scales)
+            probs = np.zeros(test_size, dtype=float)
+            probs_i = np.zeros_like(self.scales, dtype=float)
             for i in xrange(ll_test.size):
                 for j, scale in enumerate(self.scales):
                     batch_data = util.reshape(dd_test[i], self.win_size, scale)
@@ -329,7 +330,11 @@ class TsNet:
     def test_on_data(self, test_data_files):
         """Test model performance on the test set"""
         test_size = test_data_files.size
-        probs = np.zeros(test_size * len(self.scales))
+        probs = np.zeros(test_size, dtype=float)
+        probs_i = np.zeros_like(self.scales, dtype=float)
+#        weights_i = np.arange(len(self.scales), dtype="float") + 1
+#        weights_i /= weights_i.sum()
+#        logger.info("weights_i = {}".format(weights_i))
         for i, f in enumerate(test_data_files):
             test_data = util.load_data(
                     os.path.join(self.test_data_dir, f),
@@ -338,7 +343,7 @@ class TsNet:
                 batch_data = util.reshape(test_data,
                         self.win_size, scale)
                 preds_per_ts = self.model.predict_on_batch([batch_data] * 3)
-                probs[j * test_size + i] = preds_per_ts[-1].mean()
-        probs = np.mean(np.reshape(probs, (len(self.scales), test_size)),
-                axis=0)
+                probs_i = preds_per_ts[-1].mean()
+#            probs[i] = np.mean(probs_i * weights_i)
+            probs[i] = np.mean(probs_i)
         return probs

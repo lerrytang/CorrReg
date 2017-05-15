@@ -30,7 +30,11 @@ def merge_results(logdir):
 def main(args):
     for arg in vars(args):
         logger.info("{} = {}".format(arg, getattr(args, arg)))
-    logdir, modeldir = util.create_log(args.logdir, args.target_obj)
+
+    if not args.test:
+        logdir, modeldir = util.create_log(args.logdir, args.target_obj)
+    else:
+        logdir = args.logdir
 
     # load data for training
     target_data_dir = os.path.join(args.data_dir, args.target_obj)
@@ -80,18 +84,19 @@ def main(args):
         model = TsNet(args, train_mean, train_std, num_ch)
         model.build_model(logdir=logdir if fold_i==0 else None)
     
-        # train
         modeldir = os.path.join(logdir, "model")
         bestmodelpath = os.path.join(modeldir, "bestmodel_fold" + str(fold_i) + ".h5")
         finalmodelpath = os.path.join(modeldir, "finalmodel_fold" + str(fold_i) + ".h5")
-        train_hist = model.train(data[train_indice], labels[train_indice],
-                data[valid_indice], labels[valid_indice],
-                logdir, bestmodelpath, finalmodelpath, args.verbose)
-    
-        # log training history
-        hist_file = os.path.join(logdir, "hist_fold"+str(fold_i)+".pkl")
-        with open(hist_file, "wb") as f:
-            pickle.dump(train_hist.history, f)
+
+        # train
+        if not args.test:
+            train_hist = model.train(data[train_indice], labels[train_indice],
+                    data[valid_indice], labels[valid_indice],
+                    logdir, bestmodelpath, finalmodelpath, args.verbose)
+            # log training history
+            hist_file = os.path.join(logdir, "hist_fold"+str(fold_i)+".pkl")
+            with open(hist_file, "wb") as f:
+                pickle.dump(train_hist.history, f)
     
         # load test data
         if args.use_final_model:
@@ -116,6 +121,8 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--test", action="store_true", default=False,
+            help="whether to test")
     parser.add_argument("--use_final_model", action="store_true", default=False,
             help="whether to test with the model trained until max_epochs")
     parser.add_argument("--data_rebalance", action="store_true", default=False,
