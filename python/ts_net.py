@@ -235,7 +235,8 @@ class TsNet:
         logger.info("data_fetcher abort") 
 
     def train(self, train_data, train_label, valid_data, valid_label,
-            logdir, bestmodelpath, finalmodelpath, verbose=0):
+            logdir, bestmodelpath, finalmodelpath,
+            bestdiripath=None, finaldiripath=None, verbose=0):
 
         steps_per_epoch = 400
         validation_steps = valid_data.shape[0]
@@ -304,10 +305,8 @@ class TsNet:
                 logger.info("Best scores updated!")
                 logger.info("Updating best model ...")
                 self.model.save_weights(bestmodelpath)
-                if self.multiscale:
-                    dirname = os.path.dirname(bestmodelpath)
-                    np.savez(os.path.join(dirname, "bestdiri.npz"),
-                            dirichlet = self.dirichlet)
+                if bestdiripath is not None:
+                    np.savez(bestdiripath, dirichlet=self.dirichlet)
                 logger.info("Model saved.")
 
         train_hist = self.model.fit_generator(
@@ -326,10 +325,8 @@ class TsNet:
 
         logger.info("Saving final model ...")
         self.model.save_weights(finalmodelpath)
-        if self.multiscale:
-            dirname = os.path.dirname(finalmodelpath)
-            np.savez(os.path.join(dirname, "finaldiri.npz"),
-                    dirichlet = self.dirichlet)
+        if finaldiripath is not None:
+            np.savez(finaldiripath, dirichlet=self.dirichlet)
         logger.info("Model saved.")
 
         train_hist.history["weights_squared_sum"] = self.weights_hist

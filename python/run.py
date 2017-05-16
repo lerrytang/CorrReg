@@ -87,8 +87,15 @@ def main(args):
         model.build_model(logdir=logdir if fold_i==0 else None)
     
         modeldir = os.path.join(logdir, "model")
-        bestmodelpath = os.path.join(modeldir, "bestmodel_fold" + str(fold_i) + ".h5")
-        finalmodelpath = os.path.join(modeldir, "finalmodel_fold" + str(fold_i) + ".h5")
+        bestmodelpath = os.path.join(modeldir,
+                "bestmodel_fold" + str(fold_i) + ".h5")
+        finalmodelpath = os.path.join(modeldir,
+                "finalmodel_fold" + str(fold_i) + ".h5")
+        if args.rand_scale_sampling:
+            bestdiripath = os.path.join(modeldir,
+                    "bestdiri_fold" + str(fold_i) + ".npz")
+            finaldiripath = os.path.join(modeldir,
+                    "finaldiri_fold" + str(fold_i) + ".npz")
 
         # train
         if not args.test:
@@ -105,8 +112,7 @@ def main(args):
             logger.info("Load final model to test")
             model.model.load_weights(finalmodelpath)
             if args.rand_scale_sampling:
-                dirichlet_file = np.load(os.path.join(modeldir,
-                    "finaldiri.npz"))
+                dirichlet_file = np.load(finaldiripath)
                 model.model.dirichlet = dirichlet_file["dirichlet"]
             logger.info("model.model.dirichlet={}".format(
                 model.model.dirichlet))
@@ -114,8 +120,7 @@ def main(args):
             logger.info("Load best model to test")
             model.model.load_weights(bestmodelpath)
             if args.rand_scale_sampling:
-                dirichlet_file = np.load(os.path.join(modeldir,
-                    "bestdiri.npz"))
+                dirichlet_file = np.load(bestdiripath)
                 model.model.dirichlet = dirichlet_file["dirichlet"]
             logger.info("model.model.dirichlet={}".format(
                 model.model.dirichlet))
