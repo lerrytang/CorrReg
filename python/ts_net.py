@@ -306,6 +306,7 @@ class TsNet:
                 logger.info("Updating best model ...")
                 self.model.save_weights(bestmodelpath)
                 if bestdiripath is not None:
+                    logger.info("Saving dirichlet to {}".format(bestdiripath))
                     np.savez(bestdiripath, dirichlet=self.dirichlet)
                 logger.info("Model saved.")
 
@@ -326,6 +327,7 @@ class TsNet:
         logger.info("Saving final model ...")
         self.model.save_weights(finalmodelpath)
         if finaldiripath is not None:
+            logger.info("Saving dirichlet to {}".format(finaldiripath))
             np.savez(finaldiripath, dirichlet=self.dirichlet)
         logger.info("Model saved.")
 

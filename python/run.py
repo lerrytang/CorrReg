@@ -96,12 +96,16 @@ def main(args):
                     "bestdiri_fold" + str(fold_i) + ".npz")
             finaldiripath = os.path.join(modeldir,
                     "finaldiri_fold" + str(fold_i) + ".npz")
+        else:
+            bestdiripath = None
+            finaldiripath = None
 
         # train
         if not args.test:
             train_hist = model.train(data[train_indice], labels[train_indice],
                     data[valid_indice], labels[valid_indice],
-                    logdir, bestmodelpath, finalmodelpath, args.verbose)
+                    logdir, bestmodelpath, finalmodelpath,
+                    bestdiripath, finaldiripath, args.verbose)
             # log training history
             hist_file = os.path.join(logdir, "hist_fold"+str(fold_i)+".pkl")
             with open(hist_file, "wb") as f:
