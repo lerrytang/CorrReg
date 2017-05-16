@@ -77,7 +77,9 @@ def main(args):
         logger.info("train_mean={}".format(train_mean))
         logger.info("train_std.shape={}".format(train_std.shape))
         logger.info("train_std={}".format(train_std))
-        np.savez(os.path.join(logdir, filename))
+        np.savez(os.path.join(logdir, filename),
+                train_mean=train_mean,
+                train_std=train_std)
 
         # build net
         logger.info("Build model")
@@ -102,9 +104,21 @@ def main(args):
         if args.use_final_model:
             logger.info("Load final model to test")
             model.model.load_weights(finalmodelpath)
+            if args.rand_scale_sampling:
+                dirichlet_file = np.load(os.path.join(modeldir,
+                    "finaldiri.npz"))
+                model.model.dirichlet = dirichlet_file["dirichlet"]
+            logger.info("model.model.dirichlet={}".format(
+                model.model.dirichlet))
         else:
             logger.info("Load best model to test")
             model.model.load_weights(bestmodelpath)
+            if args.rand_scale_sampling:
+                dirichlet_file = np.load(os.path.join(modeldir,
+                    "bestdiri.npz"))
+                model.model.dirichlet = dirichlet_file["dirichlet"]
+            logger.info("model.model.dirichlet={}".format(
+                model.model.dirichlet))
            
         # test
         data_files = os.listdir(target_data_dir)
@@ -143,7 +157,7 @@ if __name__ == "__main__":
             help="size of sliding window")
     parser.add_argument("--batch_size", default=64, type=int,
             help="training batch size")
-    parser.add_argument("--max_epochs", default=25, type=int,
+    parser.add_argument("--max_epochs", default=50, type=int,
             help="maximum number of training iterations")
     parser.add_argument("--n_folds", default=3, type=int,
             help="training batch size")

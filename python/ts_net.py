@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 DECAY_STEPS = 2000
 DECAY_RATE = 0.95
 
+T = 0.5
 
 class TsNet:
 
@@ -34,11 +35,14 @@ class TsNet:
         self.train_mean = train_mean
         self.train_std = train_std
         self.num_channel = num_channel
-        if args.rand_scale_sampling:
-            self.scales = [1, 2]
+        self.multiscale = args.rand_scale_sampling
+        if self.multiscale:
+            self.scales = np.arange(6) + 1
         else:
-            self.scales = [1,]
-        logger.info("rand_scales={}".format(self.scales))
+            self.scales = np.array([1,])
+        self.dirichlet = np.ones_like(self.scales, dtype=float) * 0.01
+        logger.info("self.scales={}".format(self.scales))
+        logger.info("self.dirichlet={}".format(self.dirichlet))
 
         self.weights_hist = []
 
@@ -201,16 +205,21 @@ class TsNet:
             pos_idx2 = np.expand_dims(
                     np.random.choice(pos_label_idx, self.batch_size), -1)
 
-            scale_list = np.random.choice(self.scales, self.batch_size)
+            # sample scales
+            weights = np.exp(self.dirichlet / T)
+            weights /= weights.sum()
+#            weights = self.dirichlet / self.dirichlet.sum()
+#            logger.info("weights={}".format(weiths))
+            scale_list = np.random.choice(self.scales,
+                    self.batch_size, p=weights)
+#            logger.info("scale_list ={}".format(scale_list))
             batch_data = np.zeros([self.batch_size, self.win_size,
-                self.num_channel])
+                self.num_channel], dtype=float)
             batch_pos_data1 = np.zeros_like(batch_data)
             batch_pos_data2 = np.zeros_like(batch_data)
             uniq_scales = np.unique(scale_list)
-            sample_weights = np.ones(self.batch_size)
             for w, scale in enumerate(uniq_scales):
                 sel_ix = np.where(scale_list==scale)[0]
-                sample_weights[sel_ix] = w+1
                 rand_start = np.random.randint(0,
                         seq_len - self.win_size * scale + 1, sel_ix.size)
                 seq_slice = np.array([np.arange(ss,
@@ -219,37 +228,16 @@ class TsNet:
                 batch_data[sel_ix] = data[sample_idx[sel_ix], seq_slice]
                 batch_pos_data1[sel_ix] = data[pos_idx1[sel_ix], seq_slice]
                 batch_pos_data2[sel_ix] = data[pos_idx2[sel_ix], seq_slice]
-            sample_weights[batch_label==0] = 1
-#            logger.info("batch_label={}".format(batch_label))
-#            logger.info("scale_list ={}".format(scale_list))
-#            logger.info("sample_weights={}".format(sample_weights))
-            yield ([batch_data, batch_pos_data1, batch_pos_data2],
-                    [batch_label]*self.num_outputs,
-                    [sample_weights]*self.num_outputs)
+            rand_ix = np.arange(self.batch_size)
+            np.random.shuffle(rand_ix)
+            yield ([batch_data, batch_pos_data1, batch_pos_data2[rand_ix]],
+                    [batch_label]*self.num_outputs)
         logger.info("data_fetcher abort") 
-
-#    def get_ordered_batch(self, data, labels):
-#        data_size, seq_len, _ = data.shape
-#        while True:
-#            for i in xrange(data_size):
-#                batch_data = []
-#                batch_label = []
-#                sample_weights = []
-#                for w, scale in enumerate(self.scales):
-#                    tmp = util.reshape(data[i], self.win_size, scale)
-#                    batch_data.append(tmp)
-#                    batch_label.append(np.ones(tmp.shape[0]) * labels[i])
-#                    sample_weights.extend([w+1]*tmp.shape[0])
-#                batch_data = np.concatenate(batch_data)
-#                batch_label = np.concatenate(batch_label)
-#                sample_weights = np.asarray(sample_weights)
-#                yield ([batch_data]*3, [batch_label]*self.num_outputs,
-#                        [sample_weights]*self.num_outputs) 
 
     def train(self, train_data, train_label, valid_data, valid_label,
             logdir, bestmodelpath, finalmodelpath, verbose=0):
 
-        steps_per_epoch = 1000
+        steps_per_epoch = 400
         validation_steps = valid_data.shape[0]
         logger.info("max_epochs={}, steps_per_epoch={}, "\
                 "validation_steps={}".format(
@@ -258,21 +246,35 @@ class TsNet:
         self.best_acc = 0.0
         self.best_f1 = 0.0
 
-        def test(dd_test, ll_test):
+        def test(dd_test, ll_test, update_prob=False):
             test_size = ll_test.size
-            probs = np.zeros(test_size, dtype=float)
-            probs_i = np.zeros_like(self.scales, dtype=float)
-            for i in xrange(ll_test.size):
-                for j, scale in enumerate(self.scales):
+            prob_matrix = np.zeros([test_size, self.scales.size], dtype=float)
+            weights = np.exp(self.dirichlet / T)
+            weights /= weights.sum()
+#            weights = self.dirichlet / self.dirichlet.sum()
+            logger.info("weights={}".format(weights))
+            f1_scores = np.zeros_like(self.scales, dtype=float)
+            for j, scale in enumerate(self.scales):
+                for i in xrange(ll_test.size):
                     batch_data = util.reshape(dd_test[i], self.win_size, scale)
                     preds_per_ts = self.model.predict_on_batch([batch_data] * 3)
-                    probs_i[j] = preds_per_ts[-1].mean()
-                probs[i] = np.mean(probs_i)
-            preds = np.array(probs>=0.5, dtype=int)
+                    prob_matrix[i, j] = preds_per_ts[-1].mean()
+                preds_j = np.array(prob_matrix[:, j]>0.5, dtype=int)
+                f1_scores[j] = metrics.f1_score(ll_test, preds_j)
+            logger.info("f1_scores={}".format(f1_scores))
+            # merge
+            probs = prob_matrix.dot(weights)
+            preds = np.array(probs>0.5, dtype=int)
             acc = metrics.accuracy_score(ll_test, preds)
             f1 = metrics.f1_score(ll_test, preds)
             prec = metrics.precision_score(ll_test, preds)
             rec = metrics.recall_score(ll_test, preds)
+            # update prob
+            if update_prob:
+                logger.info("Updating dirichlet ...")
+                logger.info("Before update: {}".format(self.dirichlet))
+                self.dirichlet += f1_scores
+                logger.info("After update: {}".format(self.dirichlet))
             return acc, f1, prec, rec
 
         def test_on_train(epoch, logs):
@@ -289,9 +291,9 @@ class TsNet:
                         epoch, acc, f1, prec, rec))
 
         def test_on_valid(epoch, logs):
-            logger.info("Testing on validation set ...")
-            acc, f1, prec, rec = test(valid_data, valid_label)
             logger.info("------------")
+            logger.info("Testing on validation set ...")
+            acc, f1, prec, rec = test(valid_data, valid_label, True)
             logger.info("Epoch={}, val_acc={}, "\
                     "val_f1={}, val_prec={}, val_recall={}".format(
                         epoch, acc, f1, prec, rec))
@@ -302,13 +304,15 @@ class TsNet:
                 logger.info("Best scores updated!")
                 logger.info("Updating best model ...")
                 self.model.save_weights(bestmodelpath)
+                if self.multiscale:
+                    dirname = os.path.dirname(bestmodelpath)
+                    np.savez(os.path.join(dirname, "bestdiri.npz"),
+                            dirichlet = self.dirichlet)
                 logger.info("Model saved.")
 
         train_hist = self.model.fit_generator(
             generator=self.get_rand_batch(train_data, train_label),
             steps_per_epoch=steps_per_epoch,
-#            validation_data=self.get_ordered_batch(valid_data, valid_label),
-#            validation_steps=validation_steps,
             callbacks=[
                 keras.callbacks.LambdaCallback(
                     on_epoch_end=test_on_train)
@@ -322,6 +326,10 @@ class TsNet:
 
         logger.info("Saving final model ...")
         self.model.save_weights(finalmodelpath)
+        if self.multiscale:
+            dirname = os.path.dirname(finalmodelpath)
+            np.savez(os.path.join(dirname, "finaldiri.npz"),
+                    dirichlet = self.dirichlet)
         logger.info("Model saved.")
 
         train_hist.history["weights_squared_sum"] = self.weights_hist
@@ -330,11 +338,11 @@ class TsNet:
     def test_on_data(self, test_data_files):
         """Test model performance on the test set"""
         test_size = test_data_files.size
-        probs = np.zeros(test_size, dtype=float)
-        probs_i = np.zeros_like(self.scales, dtype=float)
-#        weights_i = np.arange(len(self.scales), dtype="float") + 1
-#        weights_i /= weights_i.sum()
-#        logger.info("weights_i = {}".format(weights_i))
+        prob_matrix = np.zeros([test_size, self.scales.size], dtype=float)
+        weights = np.exp(self.dirichlet / T)
+        weights /= weights.sum()
+#        weights = self.dirichlet / self.dirichlet.sum()
+        logger.info("weights={}".format(weights))
         for i, f in enumerate(test_data_files):
             test_data = util.load_data(
                     os.path.join(self.test_data_dir, f),
@@ -343,7 +351,6 @@ class TsNet:
                 batch_data = util.reshape(test_data,
                         self.win_size, scale)
                 preds_per_ts = self.model.predict_on_batch([batch_data] * 3)
-                probs_i = preds_per_ts[-1].mean()
-#            probs[i] = np.mean(probs_i * weights_i)
-            probs[i] = np.mean(probs_i)
+                prob_matrix[i, j] = preds_per_ts[-1].mean()
+        probs = prob_matrix.dot(weights)
         return probs

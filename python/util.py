@@ -117,9 +117,9 @@ def split_to_folds(labels, n_folds=2):
 def reshape(data, win_size, skip=1):
     assert np.ndim(data)==2
     seq_len, num_ch = data.shape
-    segs_per_ts = int(np.ceil(1.0 * seq_len / win_size * skip))
-    logger.debug("seq_len={}, num_ch={}, segs_per_ts={}".format(
-        seq_len, num_ch, segs_per_ts))
+    segs_per_ts = int(np.ceil(1.0 * seq_len / (win_size * skip)))
+    logger.debug("skip={}, seq_len={}, num_ch={}, segs_per_ts={}".format(
+        skip, seq_len, num_ch, segs_per_ts))
     stride = int((seq_len - win_size * skip) / (segs_per_ts - 1))
     start_idx = np.arange(0, seq_len - win_size * skip + 1, stride)
     slice_idx = np.array([np.arange(ss, ss + win_size * skip, skip)
