@@ -35,7 +35,7 @@ class TsNet:
         self.train_mean = train_mean
         self.train_std = train_std
         self.num_channel = num_channel
-        self.multiscale = args.rand_scale_sampling
+        self.multiscale = args.multiscale
         if self.multiscale:
             self.scales = np.arange(6) + 1
         else:
@@ -45,6 +45,10 @@ class TsNet:
         logger.info("self.dirichlet={}".format(self.dirichlet))
 
         self.weights_hist = []
+        self.train_acc = []
+        self.train_auc = []
+        self.valid_acc = []
+        self.valid_auc = []
 
     def build_model(self, logdir=None):
 
@@ -174,7 +178,6 @@ class TsNet:
     def get_rand_batch(self, data, labels):
         data_size, seq_len, num_ch = data.shape
         pos_label_idx = np.where(labels==1)[0]
-        logger.info("pos_label_idx={}".format(pos_label_idx))
         num_pos_samples = np.sum(labels==1)
         num_neg_samples = np.sum(labels==0)
         pos_sampling_weight = 1.0
@@ -208,7 +211,6 @@ class TsNet:
             # sample scales
             weights = np.exp(self.dirichlet / T)
             weights /= weights.sum()
-#            weights = self.dirichlet / self.dirichlet.sum()
 #            logger.info("weights={}".format(weiths))
             scale_list = np.random.choice(self.scales,
                     self.batch_size, p=weights)
@@ -252,7 +254,6 @@ class TsNet:
             prob_matrix = np.zeros([test_size, self.scales.size], dtype=float)
             weights = np.exp(self.dirichlet / T)
             weights /= weights.sum()
-#            weights = self.dirichlet / self.dirichlet.sum()
             logger.info("weights={}".format(weights))
             f1_scores = np.zeros_like(self.scales, dtype=float)
             for j, scale in enumerate(self.scales):
@@ -270,34 +271,40 @@ class TsNet:
             f1 = metrics.f1_score(ll_test, preds)
             prec = metrics.precision_score(ll_test, preds)
             rec = metrics.recall_score(ll_test, preds)
+            auc = metrics.roc_auc_score(ll_test, probs)
             # update prob
             if update_prob:
                 logger.info("Updating dirichlet ...")
                 logger.info("Before update: {}".format(self.dirichlet))
                 self.dirichlet += f1_scores
                 logger.info("After update: {}".format(self.dirichlet))
-            return acc, f1, prec, rec
+            return acc, f1, prec, rec, auc
 
         def test_on_train(epoch, logs):
             rand_ix = np.random.choice(train_label.size,
                     valid_label.size, replace=False)
             logger.info("------------")
             logger.info("Testing on training set ...")
-            acc, f1, prec, rec = test(train_data[rand_ix], train_label[rand_ix])
+            acc, f1, prec, rec, auc = test(train_data[rand_ix],
+                    train_label[rand_ix])
+            self.train_acc.append(acc)
+            self.train_auc.append(auc)
             logger.info("Epoch={}, entropy_loss={}, "\
                     " weights_squared_sum={}".format(
                         epoch, logs["prob_loss"], self.weights_squared_sum()))
-            logger.info("Epoch={}, train_acc={}, "\
+            logger.info("Epoch={}, train_acc={}, train_auc={}, "\
                     "train_f1={}, train_prec={}, train_recall={}".format(
-                        epoch, acc, f1, prec, rec))
+                        epoch, acc, auc, f1, prec, rec))
 
         def test_on_valid(epoch, logs):
             logger.info("------------")
             logger.info("Testing on validation set ...")
-            acc, f1, prec, rec = test(valid_data, valid_label, True)
-            logger.info("Epoch={}, val_acc={}, "\
+            acc, f1, prec, rec, auc = test(valid_data, valid_label, True)
+            self.valid_acc.append(acc)
+            self.valid_auc.append(auc)
+            logger.info("Epoch={}, val_acc={}, val_auc={}, "\
                     "val_f1={}, val_prec={}, val_recall={}".format(
-                        epoch, acc, f1, prec, rec))
+                        epoch, acc, auc, f1, prec, rec))
             # update best model
             if acc>self.best_acc or (acc==self.best_acc and f1>=self.best_f1):
                 self.best_acc = acc
@@ -332,6 +339,10 @@ class TsNet:
         logger.info("Model saved.")
 
         train_hist.history["weights_squared_sum"] = self.weights_hist
+        train_hist.history["train_acc"] = self.train_acc
+        train_hist.history["train_auc"] = self.train_auc
+        train_hist.history["valid_acc"] = self.valid_acc
+        train_hist.history["valid_auc"] = self.valid_auc
         return train_hist
 
     def test_on_data(self, test_data_files):
@@ -340,10 +351,9 @@ class TsNet:
         prob_matrix = np.zeros([test_size, self.scales.size], dtype=float)
         weights = np.exp(self.dirichlet / T)
         weights /= weights.sum()
-#        weights = self.dirichlet / self.dirichlet.sum()
         logger.info("weights={}".format(weights))
         for i, f in enumerate(test_data_files):
-            test_data = util.load_data(
+            test_data, _ = util.load_data(
                     os.path.join(self.test_data_dir, f),
                     "test", self.downsample)
             for j, scale in enumerate(self.scales):

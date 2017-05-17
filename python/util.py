@@ -59,7 +59,8 @@ def load_data(filename, datatype, downsample=0):
         logger.debug("downsample_mean.shape={}".format(downsample_mean.shape))
         downsample_std = np.std(data, axis=1)
         data = np.concatenate([downsample_mean, downsample_std], axis=-1)
-    return data
+#    logger.info("sequence_id={}".format(sequence))
+    return data, sequence
 
 
 def load_all_data(dirname, datatype, downsample=0):
@@ -74,17 +75,27 @@ def load_all_data(dirname, datatype, downsample=0):
     datafiles = os.listdir(dirname)
     datafiles = np.sort([f for f in datafiles if datatype in f])
     all_data = None
+    ss_ind = []  # start index of independent samples
+    ee_ind = []  # end index of independent samples
+    start_of_ind = True
     for idx, datafile in enumerate(datafiles):
         filename = os.path.join(dirname, datafile)
-        data = load_data(filename, datatype, downsample)
+        data, seq_id = load_data(filename, datatype, downsample)
         if all_data is None:
             seq_len, num_channel = data.shape
             all_data = np.zeros([len(datafiles), seq_len, num_channel],
                     dtype=data.dtype)
         all_data[idx] = np.copy(data)
+        if start_of_ind:
+            ss_ind.append(idx)
+            start_of_ind = False
+        if seq_id == 6:
+            ee_ind.append(idx)
+            start_of_ind = True
+    assert len(ss_ind)==len(ee_ind) 
     logger.info("Data from {} (shape:{}, dtype:{})".format(dirname,
         all_data.shape, all_data.dtype))
-    return all_data
+    return all_data, np.asarray(ss_ind), np.asarray(ee_ind)
 
 
 def load_train_data(target_data_dir, downsample):
@@ -93,24 +104,47 @@ def load_train_data(target_data_dir, downsample):
     logger.info("#preictal_files = {}".format(pre_data_files.size))
     int_data_files = np.sort([f for f in data_files if "interictal" in f])
     logger.info("#interictal_files = {}".format(int_data_files.size))
-    pre_data = load_all_data(target_data_dir, "preictal", downsample)
+    pre_data, ss_pre_data, ee_pre_data =\
+            load_all_data(target_data_dir, "preictal", downsample)
     logger.info("interictal_data.shape={}".format(pre_data.shape))
-    int_data = load_all_data(target_data_dir, "interictal", downsample)
+    logger.info("start of independent samples: {}".format(ss_pre_data))
+    logger.info("end of independent samples: {}".format(ee_pre_data))
+    int_data, ss_int_data, ee_int_data =\
+            load_all_data(target_data_dir, "interictal", downsample)
+    ss_int_data += pre_data.shape[0]
+    ee_int_data += pre_data.shape[0]
     logger.info("interictal_data.shape={}".format(int_data.shape))
+    logger.info("start of independent samples: {}".format(ss_int_data))
+    logger.info("end of independent samples: {}".format(ee_int_data))
     labels = np.array([1] * pre_data_files.size + \
             [0] * int_data_files.size, dtype="uint8")
     data = np.concatenate([pre_data, int_data])
     logger.info("data.dtype={}".format(data.dtype))
-    return data, labels
+    return data, labels, (ss_pre_data, ee_pre_data), (ss_int_data, ee_int_data)
 
 
-def split_to_folds(labels, n_folds=2):
+def split_to_folds(pos_ix, neg_ix, n_folds=2):
+    ss_pos, ee_pos = pos_ix
+    ss_neg, ee_neg = neg_ix
+    labels = [1]*ss_pos.size + [0]*ss_neg.size
+    ss_ix = np.concatenate([ss_pos, ss_neg])
+    ee_ix = np.concatenate([ee_pos, ee_neg])
+    assert len(labels)==ss_ix.size==ee_ix.size
+
     train_sets = []
     valid_sets = []
     skf = StratifiedKFold(labels, n_folds, shuffle=True)
     for train_ix, valid_ix in skf:
-        train_sets.append(train_ix)
-        valid_sets.append(valid_ix)
+        train_ss = ss_ix[train_ix]
+        train_ee = ee_ix[train_ix]
+        train_all_ix = np.array([np.arange(train_ss[i], train_ee[i]+1)
+                for i in xrange(train_ss.size)]).flatten()
+        valid_ss = ss_ix[valid_ix]
+        valid_ee = ee_ix[valid_ix]
+        valid_all_ix = np.array([np.arange(valid_ss[i], valid_ee[i]+1)
+                for i in xrange(valid_ss.size)]).flatten()
+        train_sets.append(train_all_ix)
+        valid_sets.append(valid_all_ix)
     return train_sets, valid_sets
 
 

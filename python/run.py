@@ -39,8 +39,9 @@ def main(args):
     # load data for training
     target_data_dir = os.path.join(args.data_dir, args.target_obj)
     logger.info("target_data_dir={}".format(target_data_dir))
-    data, labels = util.load_train_data(target_data_dir, args.downsample)
-    train_ix, valid_ix = util.split_to_folds(labels, args.n_folds)
+    data, labels, pos_ix, neg_ix =\
+            util.load_train_data(target_data_dir, args.downsample)
+    train_ix, valid_ix = util.split_to_folds(pos_ix, neg_ix, args.n_folds)
     split_file = os.path.join(logdir, "train_valid_split.pkl")
     with open(split_file, "wb") as f:
         pickle.dump((train_ix, valid_ix), f)
@@ -57,8 +58,14 @@ def main(args):
         train_indice = train_ix[fold_i]
         valid_indice = valid_ix[fold_i]
         logger.info(valid_indice)
-        logger.info("pos% in train: {}".format(labels[train_indice].mean()))
-        logger.info("pos% in valid: {}".format(labels[valid_indice].mean()))
+        logger.info("train: #pos={}, #neg={}, %pos={}".format(
+            labels[train_indice].sum(),
+            train_indice.size - labels[train_indice].sum(),
+            labels[train_indice].mean()))
+        logger.info("valid: #pos={}, #neg={}, %pos={}".format(
+            labels[valid_indice].sum(),
+            valid_indice.size - labels[valid_indice].sum(),
+            labels[valid_indice].mean()))
     
         # calculate mean and std
         npzdir = os.path.join(args.train_mean_std_dir, args.target_obj)
@@ -91,7 +98,7 @@ def main(args):
                 "bestmodel_fold" + str(fold_i) + ".h5")
         finalmodelpath = os.path.join(modeldir,
                 "finalmodel_fold" + str(fold_i) + ".h5")
-        if args.rand_scale_sampling:
+        if args.multiscale:
             bestdiripath = os.path.join(modeldir,
                     "bestdiri_fold" + str(fold_i) + ".npz")
             finaldiripath = os.path.join(modeldir,
@@ -115,19 +122,19 @@ def main(args):
         if args.use_final_model:
             logger.info("Load final model to test")
             model.model.load_weights(finalmodelpath)
-            if args.rand_scale_sampling:
+            if args.multiscale:
                 dirichlet_file = np.load(finaldiripath)
                 model.model.dirichlet = dirichlet_file["dirichlet"]
-            logger.info("model.model.dirichlet={}".format(
-                model.model.dirichlet))
+                logger.info("model.model.dirichlet={}".format(
+                    model.model.dirichlet))
         else:
             logger.info("Load best model to test")
             model.model.load_weights(bestmodelpath)
-            if args.rand_scale_sampling:
+            if args.multiscale:
                 dirichlet_file = np.load(bestdiripath)
                 model.model.dirichlet = dirichlet_file["dirichlet"]
-            logger.info("model.model.dirichlet={}".format(
-                model.model.dirichlet))
+                logger.info("model.model.dirichlet={}".format(
+                    model.model.dirichlet))
            
         # test
         data_files = os.listdir(target_data_dir)
@@ -150,8 +157,8 @@ if __name__ == "__main__":
             help="whether to test with the model trained until max_epochs")
     parser.add_argument("--data_rebalance", action="store_true", default=False,
             help="whether to rebalance dataset")
-    parser.add_argument("--rand_scale_sampling", action="store_true", default=False,
-            help="whether to random sampling with different scales")
+    parser.add_argument("--multiscale", action="store_true", default=False,
+            help="whether to apply multiscale sampling")
     parser.add_argument("--data_dir", default="../data",
             help="directory of data")
     parser.add_argument("--train_mean_std_dir", default="../train_mean_std_dir",
