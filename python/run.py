@@ -57,7 +57,6 @@ def main(args):
         # split data
         train_indice = train_ix[fold_i]
         valid_indice = valid_ix[fold_i]
-        logger.info(valid_indice)
         logger.info("train: #pos={}, #neg={}, %pos={}".format(
             labels[train_indice].sum(),
             train_indice.size - labels[train_indice].sum(),
@@ -87,6 +86,8 @@ def main(args):
         np.savez(os.path.join(logdir, filename),
                 train_mean=train_mean,
                 train_std=train_std)
+
+        continue
 
         # build net
         logger.info("Build model")
@@ -146,6 +147,7 @@ def main(args):
         output.to_csv(output_file)
         logger.info("Test result written to {}.".format(output_file))
 
+    return
     merge_results(logdir)
 
 

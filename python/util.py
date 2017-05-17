@@ -77,7 +77,7 @@ def load_all_data(dirname, datatype, downsample=0):
     all_data = None
     ss_ind = []  # start index of independent samples
     ee_ind = []  # end index of independent samples
-    start_of_ind = True
+    prev_seq_id = 1
     for idx, datafile in enumerate(datafiles):
         filename = os.path.join(dirname, datafile)
         data, seq_id = load_data(filename, datatype, downsample)
@@ -86,13 +86,14 @@ def load_all_data(dirname, datatype, downsample=0):
             all_data = np.zeros([len(datafiles), seq_len, num_channel],
                     dtype=data.dtype)
         all_data[idx] = np.copy(data)
-        if start_of_ind:
+        if seq_id <= prev_seq_id:
             ss_ind.append(idx)
-            start_of_ind = False
-        if seq_id == 6:
-            ee_ind.append(idx)
-            start_of_ind = True
-    assert len(ss_ind)==len(ee_ind) 
+            if idx-1 > 0:
+                ee_ind.append(idx-1)
+        prev_seq_id = seq_id
+    else:
+        ee_ind.append(idx)
+    assert len(ss_ind)==len(ee_ind), "{} vs {}".format(len(ss_ind), len(ee_ind))
     logger.info("Data from {} (shape:{}, dtype:{})".format(dirname,
         all_data.shape, all_data.dtype))
     return all_data, np.asarray(ss_ind), np.asarray(ee_ind)
@@ -125,6 +126,8 @@ def load_train_data(target_data_dir, downsample):
 
 def split_to_folds(pos_ix, neg_ix, n_folds=2):
     ss_pos, ee_pos = pos_ix
+    logger.info("ss_pos={}".format(ss_pos))
+    logger.info("ee_pos={}".format(ee_pos))
     ss_neg, ee_neg = neg_ix
     labels = [1]*ss_pos.size + [0]*ss_neg.size
     ss_ix = np.concatenate([ss_pos, ss_neg])
@@ -137,14 +140,23 @@ def split_to_folds(pos_ix, neg_ix, n_folds=2):
     for train_ix, valid_ix in skf:
         train_ss = ss_ix[train_ix]
         train_ee = ee_ix[train_ix]
-        train_all_ix = np.array([np.arange(train_ss[i], train_ee[i]+1)
-                for i in xrange(train_ss.size)]).flatten()
+        expanded_train_ix = []
+        for i in range(train_ss.size):
+            expanded_train_ix.extend(np.arange(train_ss[i], train_ee[i]+1).tolist())
+        expanded_train_ix = np.array(expanded_train_ix)
+        logger.info("expanded_train_ix={}".format(expanded_train_ix))
+
         valid_ss = ss_ix[valid_ix]
         valid_ee = ee_ix[valid_ix]
-        valid_all_ix = np.array([np.arange(valid_ss[i], valid_ee[i]+1)
-                for i in xrange(valid_ss.size)]).flatten()
-        train_sets.append(train_all_ix)
-        valid_sets.append(valid_all_ix)
+        expanded_valid_ix = []
+        for i in range(valid_ss.size):
+            expanded_valid_ix.extend(np.arange(valid_ss[i], valid_ee[i]+1).tolist())
+        expanded_valid_ix = np.array(expanded_valid_ix)
+        logger.info("expanded_valid_ix={}".format(expanded_valid_ix))
+
+        train_sets.append(expanded_train_ix)
+        valid_sets.append(expanded_valid_ix)
+
     return train_sets, valid_sets
 
 
