@@ -87,8 +87,6 @@ def main(args):
                 train_mean=train_mean,
                 train_std=train_std)
 
-        continue
-
         # build net
         logger.info("Build model")
         model = TsNet(args, train_mean, train_std, num_ch)
@@ -147,7 +145,6 @@ def main(args):
         output.to_csv(output_file)
         logger.info("Test result written to {}.".format(output_file))
 
-    return
     merge_results(logdir)
 
 
