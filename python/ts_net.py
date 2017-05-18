@@ -234,11 +234,15 @@ class TsNet:
         data_size = labels.size
         logger.info("get_batch off to work (data_size={})".format(data_size))
         while True:
-            for scale in self.scales:
+            for s, scale in enumerate(self.scales):
                 for i in xrange(data_size):
                     batch_data = util.reshape(data[i], self.win_size, scale)
                     batch_label = np.ones(batch_data.shape[0]) * labels[i]
-                    yield ([batch_data]*3, [batch_label]*self.num_outputs)
+                    batch_weights = \
+                            np.ones(batch_data.shape[0]) * self.scale_weights[s]
+                    yield ([batch_data]*3,
+                            [batch_label]*self.num_outputs,
+                            [batch_weights]*self.num_outputs)
 
     def train(self, train_data, train_label, valid_data, valid_label,
             logdir, bestmodelpath, finalmodelpath,
