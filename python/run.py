@@ -13,8 +13,8 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger(__name__)
 
 
-def merge_results(logdir):
-    output_files = [f for f in os.listdir(logdir) if f[:6]=="output"]
+def merge_results(logdir, prefix="min"):
+    output_files = [f for f in os.listdir(logdir) if f[:3]==prefix]
     res = None
     for f in output_files:
         tmp = pd.read_csv(os.path.join(logdir, f), index_col=0, header=None)
@@ -23,7 +23,8 @@ def merge_results(logdir):
         else:
             res = res + tmp
     res /= len(output_files)
-    res.to_csv(os.path.join(logdir, "csv_to_submit.csv"), header=False)
+    res.to_csv(os.path.join(logdir, "submit_{}.csv".format(prefix)),
+            header=False)
     return res
 
 
@@ -119,43 +120,36 @@ def main(args):
             with open(hist_file, "wb") as f:
                 pickle.dump(train_hist.history, f)
     
-        # load test data
-        if args.use_final_model:
-            logger.info("Load final model to test")
-            model.model.load_weights(finalmodelpath)
-            if args.multiscale:
-                theta_file = np.load(final_theta_path)
-                model.model.theta = theta_file["theta"]
-                logger.info("model.model.theta={}".format(
-                    model.model.theta))
-        else:
-            logger.info("Load best model to test")
-            model.model.load_weights(bestmodelpath)
-            if args.multiscale:
-                theta_file = np.load(best_theta_path)
-                model.model.theta = theta_file["theta"]
-                logger.info("model.model.theta={}".format(
-                    model.model.theta))
-           
         # test
         data_files = os.listdir(target_data_dir)
         test_data_files = np.sort([f for f in data_files if "test" in f])
         logger.info("#test_files = {}".format(test_data_files.size))
-        preds = model.test_on_data(test_data_files)
-        output = pd.Series(preds, index=test_data_files)
-        output_file = os.path.join(logdir, "output_fold"+str(fold_i)+".csv")
-        output.to_csv(output_file)
-        logger.info("Test result written to {}.".format(output_file))
+        test_params = [(finalmodelpath, final_theta_path, "fin"),
+                (bestmodelpath, best_theta_path, "min")]
+        for test_param in test_params:
+            modelpath, thetapath, modeltype = test_param
+            logger.info("Load {} model to test".format(modeltype))
+            model.model.load_weights(modelpath)
+            if args.multiscale:
+                theta_file = np.load(thetapath)
+                model.model.theta = theta_file["theta"]
+                logger.info("model.model.theta={}".format(
+                    model.model.theta))
+            preds = model.test_on_data(test_data_files)
+            output = pd.Series(preds, index=test_data_files)
+            output_file = os.path.join(logdir,
+                    "{}_fold{}.csv".format(modeltype, fold_i))
+            output.to_csv(output_file)
+            logger.info("Test result written to {}.".format(output_file))
 
     merge_results(logdir)
+    merge_results(logdir, "fin")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--test", action="store_true", default=False,
             help="whether to test")
-    parser.add_argument("--use_final_model", action="store_true", default=False,
-            help="whether to test with the model trained until max_epochs")
     parser.add_argument("--data_rebalance", action="store_true", default=False,
             help="whether to rebalance dataset")
     parser.add_argument("--multiscale", action="store_true", default=False,
@@ -182,7 +176,7 @@ if __name__ == "__main__":
             help="random seed for reproducibility")
     parser.add_argument("--verbose", default=0, type=int,
             help="verbose for training process")
-    parser.add_argument("--reg_coef", default=0.0001, type=float,
+    parser.add_argument("--reg_coef", default=0.00001, type=float,
             help="L2 regularization strength")
     parser.add_argument("--init_lr", default=0.001, type=float,
             help="initial learning rate")
