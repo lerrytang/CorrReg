@@ -105,8 +105,8 @@ def main(args):
             final_theta_path = os.path.join(modeldir,
                     "final_theta_fold" + str(fold_i) + ".npz")
         else:
-            bestthetapath = None
-            finalthetapath = None
+            best_theta_path = None
+            final_theta_path = None
 
         # train
         if not args.test:

@@ -39,9 +39,10 @@ class TsNet:
         self.multiscale = args.multiscale
         if self.multiscale:
             self.scales = np.arange(NUM_SCALES) + 1
+            self.theta = np.ones(NUM_SCALES) 
         else:
             self.scales = np.array([1,])
-        self.theta = np.ones(NUM_SCALES) 
+            self.theta = np.array([1.0])
         logger.info("self.scales={}".format(self.scales))
         logger.info("self.theta={}".format(self.theta))
 
@@ -207,7 +208,8 @@ class TsNet:
 
             # sample scales
             scale_list = np.random.choice(self.scales,
-                    self.batch_size, p=self.scale_weights)
+                    self.batch_size,
+                    p=self.scale_weights if self.multiscale else None)
             batch_data = np.zeros([self.batch_size, self.win_size,
                 self.num_channel], dtype=float)
             batch_pos_data1 = np.zeros_like(batch_data)
@@ -251,42 +253,48 @@ class TsNet:
         self.min_val_prob_loss = np.inf
 
         def update_theta(epoch, logs):
+
             # log weights by the way
             self.weights_squared_sum()
 
-            # sample train data for testing
-            rand_ix = np.random.choice(train_label.size,
-                    valid_label.size, replace=False)
-            ll_test = train_label[rand_ix]
-            dd_test = train_data[rand_ix]
+            # print stats
             logger.info("Epoch={}, train_prob_loss={}, val_prob_loss={}, "\
                     "L2(weights)={}".format(epoch+1, logs["prob_loss"],
                         logs["val_prob_loss"], self.weights_hist[-1]))
-            logger.info("Updating theta ...")
-            logger.info("\tBefore update: theta={}, scale_weights={}".format(
-                self.theta, self.scale_weights))
-            log_likelihood = np.zeros_like(self.theta)
-            for s, scale in enumerate(self.scales):
-                probs = np.zeros(ll_test.size)
-                for i in xrange(ll_test.size):
-                    batch_data = util.reshape(dd_test[i], self.win_size, scale)
-                    preds_per_ts = self.model.predict_on_batch([batch_data] * 3)
-                    probs[i] = preds_per_ts[-1].mean()
-                neg_mask = ll_test==0
-                probs[neg_mask] = 1-probs[neg_mask]
-                log_likelihood[s] = np.mean(np.log(probs))
-            exp_theta = np.exp(self.theta)
-            y_s = exp_theta / exp_theta.sum()
-            self.theta += log_likelihood * y_s * (1-y_s) / T
-            logger.info("\tAfter update: theta={}, scale_weights={}".format(
-                self.theta, self.scale_weights))
+
+
+            # sample train data for testing
+            if self.multiscale:
+                rand_ix = np.random.choice(train_label.size,
+                        valid_label.size, replace=False)
+                ll_test = train_label[rand_ix]
+                dd_test = train_data[rand_ix]
+                logger.info("Updating theta ...")
+                logger.info("\tBefore update: theta={}, scale_weights={}".format(
+                    self.theta, self.scale_weights))
+                log_likelihood = np.zeros_like(self.theta)
+                for s, scale in enumerate(self.scales):
+                    probs = np.zeros(ll_test.size)
+                    for i in xrange(ll_test.size):
+                        batch_data = util.reshape(dd_test[i], self.win_size, scale)
+                        preds_per_ts = self.model.predict_on_batch([batch_data] * 3)
+                        probs[i] = preds_per_ts[-1].mean()
+                    neg_mask = ll_test==0
+                    probs[neg_mask] = 1-probs[neg_mask]
+                    log_likelihood[s] = np.mean(np.log(probs))
+                exp_theta = np.exp(self.theta)
+                y_s = exp_theta / exp_theta.sum()
+                self.theta += log_likelihood * y_s * (1-y_s) / T
+                logger.info("\tAfter update: theta={}, scale_weights={}".format(
+                    self.theta, self.scale_weights))
 
             # save model if necessary
             val_prob_loss = logs["val_prob_loss"]
             if val_prob_loss <= self.min_val_prob_loss:
                 self.min_val_prob_loss = val_prob_loss
                 self.model.save_weights(bestmodelpath)
-                np.savez(best_theta_path, theta=self.theta)
+                if self.multiscale:
+                    np.savez(best_theta_path, theta=self.theta)
                 logger.info("Best model updated.")
 
             logger.info("-"*50)
