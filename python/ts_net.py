@@ -308,9 +308,9 @@ class TsNet:
                 keras.callbacks.LambdaCallback(
                     on_epoch_end=update_theta),
                 keras.callbacks.EarlyStopping(
-                    monitor="prob_loss",
-                    min_delta=0.001,
-                    patience=3,
+                    monitor="val_prob_loss",
+                    min_delta=0.0001,
+                    patience=10,
                     mode="min"),
 #                keras.callbacks.TensorBoard(
 #                    log_dir=logdir,
