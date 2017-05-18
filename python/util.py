@@ -107,16 +107,16 @@ def load_train_data(target_data_dir, downsample):
     logger.info("#interictal_files = {}".format(int_data_files.size))
     pre_data, ss_pre_data, ee_pre_data =\
             load_all_data(target_data_dir, "preictal", downsample)
-    logger.info("interictal_data.shape={}".format(pre_data.shape))
-    logger.info("start of independent samples: {}".format(ss_pre_data))
+#    logger.info("interictal_data.shape={}".format(pre_data.shape))
+#    logger.info("start of independent samples: {}".format(ss_pre_data))
     logger.info("end of independent samples: {}".format(ee_pre_data))
     int_data, ss_int_data, ee_int_data =\
             load_all_data(target_data_dir, "interictal", downsample)
     ss_int_data += pre_data.shape[0]
     ee_int_data += pre_data.shape[0]
     logger.info("interictal_data.shape={}".format(int_data.shape))
-    logger.info("start of independent samples: {}".format(ss_int_data))
-    logger.info("end of independent samples: {}".format(ee_int_data))
+#    logger.info("start of independent samples: {}".format(ss_int_data))
+#    logger.info("end of independent samples: {}".format(ee_int_data))
     labels = np.array([1] * pre_data_files.size + \
             [0] * int_data_files.size, dtype="uint8")
     data = np.concatenate([pre_data, int_data])
@@ -144,7 +144,7 @@ def split_to_folds(pos_ix, neg_ix, n_folds=2):
         for i in range(train_ss.size):
             expanded_train_ix.extend(np.arange(train_ss[i], train_ee[i]+1).tolist())
         expanded_train_ix = np.array(expanded_train_ix)
-        logger.info("expanded_train_ix={}".format(expanded_train_ix))
+#        logger.info("expanded_train_ix={}".format(expanded_train_ix))
 
         valid_ss = ss_ix[valid_ix]
         valid_ee = ee_ix[valid_ix]
@@ -152,7 +152,7 @@ def split_to_folds(pos_ix, neg_ix, n_folds=2):
         for i in range(valid_ss.size):
             expanded_valid_ix.extend(np.arange(valid_ss[i], valid_ee[i]+1).tolist())
         expanded_valid_ix = np.array(expanded_valid_ix)
-        logger.info("expanded_valid_ix={}".format(expanded_valid_ix))
+#        logger.info("expanded_valid_ix={}".format(expanded_valid_ix))
 
         train_sets.append(expanded_train_ix)
         valid_sets.append(expanded_valid_ix)
@@ -172,5 +172,4 @@ def reshape(data, win_size, skip=1):
         for ss in start_idx])
     reshaped_data = data[slice_idx]
     return reshaped_data
-
 

@@ -51,12 +51,14 @@ def main(args):
 
     # CV
     for fold_i in xrange(args.n_folds):
-        logger.info("<fold {}>".format(fold_i))
         logger.info("---------------")
+        logger.info("<fold {}>".format(fold_i))
 
         # split data
         train_indice = train_ix[fold_i]
         valid_indice = valid_ix[fold_i]
+        logger.info("train_ix={}".format(train_indice))
+        logger.info("valid_ix={}".format(valid_indice))
         logger.info("train: #pos={}, #neg={}, %pos={}".format(
             labels[train_indice].sum(),
             train_indice.size - labels[train_indice].sum(),
@@ -94,24 +96,24 @@ def main(args):
     
         modeldir = os.path.join(logdir, "model")
         bestmodelpath = os.path.join(modeldir,
-                "bestmodel_fold" + str(fold_i) + ".h5")
+                "best_model_fold" + str(fold_i) + ".h5")
         finalmodelpath = os.path.join(modeldir,
-                "finalmodel_fold" + str(fold_i) + ".h5")
+                "final_model_fold" + str(fold_i) + ".h5")
         if args.multiscale:
-            bestdiripath = os.path.join(modeldir,
-                    "bestdiri_fold" + str(fold_i) + ".npz")
-            finaldiripath = os.path.join(modeldir,
-                    "finaldiri_fold" + str(fold_i) + ".npz")
+            best_theta_path = os.path.join(modeldir,
+                    "best_theta_fold" + str(fold_i) + ".npz")
+            final_theta_path = os.path.join(modeldir,
+                    "final_theta_fold" + str(fold_i) + ".npz")
         else:
-            bestdiripath = None
-            finaldiripath = None
+            bestthetapath = None
+            finalthetapath = None
 
         # train
         if not args.test:
             train_hist = model.train(data[train_indice], labels[train_indice],
                     data[valid_indice], labels[valid_indice],
                     logdir, bestmodelpath, finalmodelpath,
-                    bestdiripath, finaldiripath, args.verbose)
+                    best_theta_path, final_theta_path, args.verbose)
             # log training history
             hist_file = os.path.join(logdir, "hist_fold"+str(fold_i)+".pkl")
             with open(hist_file, "wb") as f:
@@ -122,18 +124,18 @@ def main(args):
             logger.info("Load final model to test")
             model.model.load_weights(finalmodelpath)
             if args.multiscale:
-                dirichlet_file = np.load(finaldiripath)
-                model.model.dirichlet = dirichlet_file["dirichlet"]
-                logger.info("model.model.dirichlet={}".format(
-                    model.model.dirichlet))
+                theta_file = np.load(final_theta_path)
+                model.model.theta = theta_file["theta"]
+                logger.info("model.model.theta={}".format(
+                    model.model.theta))
         else:
             logger.info("Load best model to test")
             model.model.load_weights(bestmodelpath)
             if args.multiscale:
-                dirichlet_file = np.load(bestdiripath)
-                model.model.dirichlet = dirichlet_file["dirichlet"]
-                logger.info("model.model.dirichlet={}".format(
-                    model.model.dirichlet))
+                theta_file = np.load(best_theta_path)
+                model.model.theta = theta_file["theta"]
+                logger.info("model.model.theta={}".format(
+                    model.model.theta))
            
         # test
         data_files = os.listdir(target_data_dir)
@@ -172,7 +174,7 @@ if __name__ == "__main__":
             help="size of sliding window")
     parser.add_argument("--batch_size", default=64, type=int,
             help="training batch size")
-    parser.add_argument("--max_epochs", default=50, type=int,
+    parser.add_argument("--max_epochs", default=100, type=int,
             help="maximum number of training iterations")
     parser.add_argument("--n_folds", default=3, type=int,
             help="training batch size")
@@ -180,7 +182,7 @@ if __name__ == "__main__":
             help="random seed for reproducibility")
     parser.add_argument("--verbose", default=0, type=int,
             help="verbose for training process")
-    parser.add_argument("--reg_coef", default=0.0, type=float,
+    parser.add_argument("--reg_coef", default=0.0001, type=float,
             help="L2 regularization strength")
     parser.add_argument("--init_lr", default=0.001, type=float,
             help="initial learning rate")

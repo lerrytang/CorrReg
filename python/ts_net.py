@@ -18,7 +18,8 @@ logger = logging.getLogger(__name__)
 DECAY_STEPS = 2000
 DECAY_RATE = 0.95
 
-T = 0.5
+NUM_SCALES = 4
+T = 0.2
 
 class TsNet:
 
@@ -37,18 +38,19 @@ class TsNet:
         self.num_channel = num_channel
         self.multiscale = args.multiscale
         if self.multiscale:
-            self.scales = np.arange(6) + 1
+            self.scales = np.arange(NUM_SCALES) + 1
         else:
             self.scales = np.array([1,])
-        self.dirichlet = np.ones_like(self.scales, dtype=float) * 0.01
+        self.theta = np.ones(NUM_SCALES) 
         logger.info("self.scales={}".format(self.scales))
-        logger.info("self.dirichlet={}".format(self.dirichlet))
+        logger.info("self.theta={}".format(self.theta))
 
         self.weights_hist = []
-        self.train_acc = []
-        self.train_auc = []
-        self.valid_acc = []
-        self.valid_auc = []
+
+    @property
+    def scale_weights(self):
+        tmp = np.exp(self.theta / T)
+        return tmp / tmp.sum()
 
     def build_model(self, logdir=None):
 
@@ -149,12 +151,7 @@ class TsNet:
         logger.info(loss_weights)
         self.model = Model(inputs=[input_data, pos_data1, pos_data2],
                 outputs=outputs)
-#        optimizer = optimizers.Adam(lr=self.init_lr, decay=1e-6)
-        self.global_step = tf.Variable(0, name="global_step", trainable=False)
-        lr = tf.train.exponential_decay(self.init_lr, self.global_step,
-           DECAY_STEPS, DECAY_RATE, staircase=True)
-        optimizer = optimizers.TFOptimizer(tf.train.AdamOptimizer(lr))
-
+        optimizer = optimizers.Adam(lr=self.init_lr, decay=1e-6)
         self.model.compile(optimizer=optimizer,
                 loss=losses, loss_weights=loss_weights)
 
@@ -189,7 +186,7 @@ class TsNet:
         sampling_weights[labels==1] *= pos_sampling_weight
         sampling_weights /= np.sum(sampling_weights)
 
-        logger.info("data_fetcher off to work")
+        logger.info("get_rand_batch off to work")
         while True:
             sample_idx = np.random.choice(data_size, self.batch_size,
                     p=sampling_weights)
@@ -209,12 +206,8 @@ class TsNet:
                     np.random.choice(pos_label_idx, self.batch_size), -1)
 
             # sample scales
-            weights = np.exp(self.dirichlet / T)
-            weights /= weights.sum()
-#            logger.info("weights={}".format(weiths))
             scale_list = np.random.choice(self.scales,
-                    self.batch_size, p=weights)
-#            logger.info("scale_list ={}".format(scale_list))
+                    self.batch_size, p=self.scale_weights)
             batch_data = np.zeros([self.batch_size, self.win_size,
                 self.num_channel], dtype=float)
             batch_pos_data1 = np.zeros_like(batch_data)
@@ -234,98 +227,87 @@ class TsNet:
             np.random.shuffle(rand_ix)
             yield ([batch_data, batch_pos_data1, batch_pos_data2[rand_ix]],
                     [batch_label]*self.num_outputs)
-        logger.info("data_fetcher abort") 
+
+    def get_batch(self, data, labels):
+        data_size = labels.size
+        logger.info("get_batch off to work (data_size={})".format(data_size))
+        while True:
+            for scale in self.scales:
+                for i in xrange(data_size):
+                    batch_data = util.reshape(data[i], self.win_size, scale)
+                    batch_label = np.ones(batch_data.shape[0]) * labels[i]
+                    yield ([batch_data]*3, [batch_label]*self.num_outputs)
 
     def train(self, train_data, train_label, valid_data, valid_label,
             logdir, bestmodelpath, finalmodelpath,
-            bestdiripath=None, finaldiripath=None, verbose=0):
+            best_theta_path=None, final_theta_path=None, verbose=0):
 
-        steps_per_epoch = 400
+        steps_per_epoch = 200
         validation_steps = valid_data.shape[0]
         logger.info("max_epochs={}, steps_per_epoch={}, "\
                 "validation_steps={}".format(
                     self.max_epochs, steps_per_epoch, validation_steps))
 
-        self.best_acc = 0.0
-        self.best_f1 = 0.0
+        self.min_val_prob_loss = np.inf
 
-        def test(dd_test, ll_test, update_prob=False):
-            test_size = ll_test.size
-            prob_matrix = np.zeros([test_size, self.scales.size], dtype=float)
-            weights = np.exp(self.dirichlet / T)
-            weights /= weights.sum()
-            logger.info("weights={}".format(weights))
-            f1_scores = np.zeros_like(self.scales, dtype=float)
-            for j, scale in enumerate(self.scales):
+        def update_theta(epoch, logs):
+            # log weights by the way
+            self.weights_squared_sum()
+
+            # sample train data for testing
+            rand_ix = np.random.choice(train_label.size,
+                    valid_label.size, replace=False)
+            ll_test = train_label[rand_ix]
+            dd_test = train_data[rand_ix]
+            logger.info("Epoch={}, train_prob_loss={}, val_prob_loss={}, "\
+                    "L2(weights)={}".format(epoch+1, logs["prob_loss"],
+                        logs["val_prob_loss"], self.weights_hist[-1]))
+            logger.info("Updating theta ...")
+            logger.info("\tBefore update: theta={}, scale_weights={}".format(
+                self.theta, self.scale_weights))
+            log_likelihood = np.zeros_like(self.theta)
+            for s, scale in enumerate(self.scales):
+                probs = np.zeros(ll_test.size)
                 for i in xrange(ll_test.size):
                     batch_data = util.reshape(dd_test[i], self.win_size, scale)
                     preds_per_ts = self.model.predict_on_batch([batch_data] * 3)
-                    prob_matrix[i, j] = preds_per_ts[-1].mean()
-                preds_j = np.array(prob_matrix[:, j]>0.5, dtype=int)
-                f1_scores[j] = metrics.f1_score(ll_test, preds_j)
-            logger.info("f1_scores={}".format(f1_scores))
-            # merge
-            probs = prob_matrix.dot(weights)
-            preds = np.array(probs>0.5, dtype=int)
-            acc = metrics.accuracy_score(ll_test, preds)
-            f1 = metrics.f1_score(ll_test, preds)
-            prec = metrics.precision_score(ll_test, preds)
-            rec = metrics.recall_score(ll_test, preds)
-            auc = metrics.roc_auc_score(ll_test, probs)
-            # update prob
-            if update_prob:
-                logger.info("Updating dirichlet ...")
-                logger.info("Before update: {}".format(self.dirichlet))
-                self.dirichlet += f1_scores
-                logger.info("After update: {}".format(self.dirichlet))
-            return acc, f1, prec, rec, auc
+                    probs[i] = preds_per_ts[-1].mean()
+                neg_mask = ll_test==0
+                probs[neg_mask] = 1-probs[neg_mask]
+                log_likelihood[s] = np.mean(np.log(probs))
+            exp_theta = np.exp(self.theta)
+            y_s = exp_theta / exp_theta.sum()
+            self.theta += log_likelihood * y_s * (1-y_s) / T
+            logger.info("\tAfter update: theta={}, scale_weights={}".format(
+                self.theta, self.scale_weights))
 
-        def test_on_train(epoch, logs):
-            rand_ix = np.random.choice(train_label.size,
-                    valid_label.size, replace=False)
-            logger.info("------------")
-            logger.info("Testing on training set ...")
-            acc, f1, prec, rec, auc = test(train_data[rand_ix],
-                    train_label[rand_ix])
-            self.train_acc.append(acc)
-            self.train_auc.append(auc)
-            logger.info("Epoch={}, entropy_loss={}, "\
-                    " weights_squared_sum={}".format(
-                        epoch, logs["prob_loss"], self.weights_squared_sum()))
-            logger.info("Epoch={}, train_acc={}, train_auc={}, "\
-                    "train_f1={}, train_prec={}, train_recall={}".format(
-                        epoch, acc, auc, f1, prec, rec))
-
-        def test_on_valid(epoch, logs):
-            logger.info("------------")
-            logger.info("Testing on validation set ...")
-            acc, f1, prec, rec, auc = test(valid_data, valid_label, True)
-            self.valid_acc.append(acc)
-            self.valid_auc.append(auc)
-            logger.info("Epoch={}, val_acc={}, val_auc={}, "\
-                    "val_f1={}, val_prec={}, val_recall={}".format(
-                        epoch, acc, auc, f1, prec, rec))
-            # update best model
-            if acc>self.best_acc or (acc==self.best_acc and f1>=self.best_f1):
-                self.best_acc = acc
-                self.best_f1 = f1
-                logger.info("Best scores updated!")
-                logger.info("Updating best model ...")
+            # save model if necessary
+            val_prob_loss = logs["val_prob_loss"]
+            if val_prob_loss <= self.min_val_prob_loss:
+                self.min_val_prob_loss = val_prob_loss
                 self.model.save_weights(bestmodelpath)
-                if bestdiripath is not None:
-                    logger.info("Saving dirichlet to {}".format(bestdiripath))
-                    np.savez(bestdiripath, dirichlet=self.dirichlet)
-                logger.info("Model saved.")
+                np.savez(best_theta_path, theta=self.theta)
+                logger.info("Best model updated.")
+
+            logger.info("-"*50)
 
         train_hist = self.model.fit_generator(
             generator=self.get_rand_batch(train_data, train_label),
             steps_per_epoch=steps_per_epoch,
+            validation_data=self.get_batch(valid_data, valid_label),
+            validation_steps=self.scales.size*valid_label.size,
             callbacks=[
                 keras.callbacks.LambdaCallback(
-                    on_epoch_end=test_on_train)
-                ,
-                keras.callbacks.LambdaCallback(
-                    on_epoch_end=test_on_valid)
+                    on_epoch_end=update_theta),
+                keras.callbacks.EarlyStopping(
+                    monitor="prob_loss",
+                    min_delta=0.001,
+                    patience=3,
+                    mode="min"),
+#                keras.callbacks.TensorBoard(
+#                    log_dir=logdir,
+#                    histogram_freq=2,
+#                    write_images=True),
                 ],
             verbose=verbose,
             epochs=self.max_epochs
@@ -333,25 +315,19 @@ class TsNet:
 
         logger.info("Saving final model ...")
         self.model.save_weights(finalmodelpath)
-        if finaldiripath is not None:
-            logger.info("Saving dirichlet to {}".format(finaldiripath))
-            np.savez(finaldiripath, dirichlet=self.dirichlet)
+        if final_theta_path is not None:
+            logger.info("Saving theta to {}".format(final_theta_path))
+            np.savez(final_theta_path, theta=self.theta)
         logger.info("Model saved.")
 
         train_hist.history["weights_squared_sum"] = self.weights_hist
-        train_hist.history["train_acc"] = self.train_acc
-        train_hist.history["train_auc"] = self.train_auc
-        train_hist.history["valid_acc"] = self.valid_acc
-        train_hist.history["valid_auc"] = self.valid_auc
         return train_hist
 
     def test_on_data(self, test_data_files):
         """Test model performance on the test set"""
         test_size = test_data_files.size
         prob_matrix = np.zeros([test_size, self.scales.size], dtype=float)
-        weights = np.exp(self.dirichlet / T)
-        weights /= weights.sum()
-        logger.info("weights={}".format(weights))
+        logger.info("self.scale_weights={}".format(self.scale_weights))
         for i, f in enumerate(test_data_files):
             test_data, _ = util.load_data(
                     os.path.join(self.test_data_dir, f),
@@ -361,5 +337,5 @@ class TsNet:
                         self.win_size, scale)
                 preds_per_ts = self.model.predict_on_batch([batch_data] * 3)
                 prob_matrix[i, j] = preds_per_ts[-1].mean()
-        probs = prob_matrix.dot(weights)
+        probs = prob_matrix.dot(self.scale_weights)
         return probs
