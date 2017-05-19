@@ -58,22 +58,18 @@ class TsNet:
         def corr_loss_func(y_true, y_pred):
             return y_pred
         
-        def gram_matrix(x):
-            assert K.ndim(x) == 3
-            # original dims: batch_size x fea_len x num_filter
-            # target dims: (batch_size x num_filter) x fea_len
-            features_permuted = K.permute_dimensions(x, (1, 0, 2))
-            features = K.batch_flatten(features_permuted) 
-            gram = K.dot(K.transpose(features), features)
-            return gram
-        
         def corr_pp(x):
             pos_set1 = x[0]
             pos_set2 = x[1]
-            gm1 = gram_matrix(pos_set1)
-            gm2 = gram_matrix(pos_set2)
-            return K.mean(K.square(gm1 - gm2))
-        
+            # gram matrix
+            gm1 = tf.matmul(pos_set1, pos_set1, transpose_a=True)
+            gm2 = tf.matmul(pos_set2, pos_set2, transpose_a=True)
+            logger.info("gm1.shape={}".format(gm1.shape))
+            logger.info("gm2.shape={}".format(gm2.shape))
+            gm_mse = tf.reduce_mean(tf.square(gm1-gm2))
+            logger.info("gm_mse.shape={}".format(gm_mse.shape))
+            return gm_mse
+      
         # outputs
         outputs = []
         losses = []
@@ -108,10 +104,6 @@ class TsNet:
             x_all_data = conv_layer(x_all_data)
             x_pos_data1 = conv_layer(x_pos_data1)
             x_pos_data2 = conv_layer(x_pos_data2)
-            # corr
-            corr_pp = corr_layer([x_pos_data1, x_pos_data2])
-            outputs.append(corr_pp)
-            losses.append(corr_loss_func)
             # batch norm
             bn_layer = BatchNormalization()
             x_all_data = bn_layer(x_all_data)
@@ -122,6 +114,10 @@ class TsNet:
             x_all_data = activation_layer(x_all_data)
             x_pos_data1 = activation_layer(x_pos_data1)
             x_pos_data2 = activation_layer(x_pos_data2)
+            # corr
+            corr_pp = corr_layer([x_pos_data1, x_pos_data2])
+            outputs.append(corr_pp)
+            losses.append(corr_loss_func)
 
         x_all_data = Flatten(name="flatten")(x_all_data)
         for i in xrange(2):
@@ -175,6 +171,7 @@ class TsNet:
     def get_rand_batch(self, data, labels):
         data_size, seq_len, num_ch = data.shape
         pos_label_idx = np.where(labels==1)[0]
+        logger.info("#pos_samples={}".format(pos_label_idx.size))
         num_pos_samples = np.sum(labels==1)
         num_neg_samples = np.sum(labels==0)
         pos_sampling_weight = 1.0
@@ -259,8 +256,9 @@ class TsNet:
             self.weights_squared_sum()
 
             # print stats
-            logger.info("Epoch={}, train_prob_loss={}, val_prob_loss={}, "\
-                    "L2(weights)={}".format(epoch+1, logs["prob_loss"],
+            logger.info("Epoch={}, train_loss={}, train_prob_loss={}, "\
+                    "val_prob_loss={}, L2(weights)={}".format(
+                        epoch+1, logs["loss"],logs["prob_loss"],
                         logs["val_prob_loss"], self.weights_hist[-1]))
             if self.corr_coef_pp>0:
                 logger.info("\tcorr_pp_loss={}".format(
