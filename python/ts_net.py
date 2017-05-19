@@ -59,20 +59,19 @@ class TsNet:
             return y_pred
         
         def gram_matrix(x):
-            if K.ndim(x) == 2:
-                features = K.transpose(x)
-            else:
-                features = K.batch_flatten(K.permute_dimensions(x, (2, 0, 1)))
-            gram = K.dot(features, K.transpose(features))
+            assert K.ndim(x) == 3
+            # original dims: batch_size x fea_len x num_filter
+            # target dims: (batch_size x num_filter) x fea_len
+            features_permuted = K.permute_dimensions(x, (1, 0, 2))
+            features = K.batch_flatten(features_permuted) 
+            gram = K.dot(K.transpose(features), features)
             return gram
         
         def corr_pp(x):
             pos_set1 = x[0]
             pos_set2 = x[1]
-            pos_set1_avg = K.mean(pos_set1, axis=0)
-            pos_set2_avg = K.mean(pos_set2, axis=0)
-            gm1 = gram_matrix(pos_set1_avg)
-            gm2 = gram_matrix(pos_set2_avg)
+            gm1 = gram_matrix(pos_set1)
+            gm2 = gram_matrix(pos_set2)
             return K.mean(K.square(gm1 - gm2))
         
         # outputs
@@ -225,9 +224,7 @@ class TsNet:
                 batch_data[sel_ix] = data[sample_idx[sel_ix], seq_slice]
                 batch_pos_data1[sel_ix] = data[pos_idx1[sel_ix], seq_slice]
                 batch_pos_data2[sel_ix] = data[pos_idx2[sel_ix], seq_slice]
-            rand_ix = np.arange(self.batch_size)
-            np.random.shuffle(rand_ix)
-            yield ([batch_data, batch_pos_data1, batch_pos_data2[rand_ix]],
+            yield ([batch_data, batch_pos_data1, batch_pos_data2],
                     [batch_label]*self.num_outputs)
 
     def get_batch(self, data, labels):
@@ -265,7 +262,10 @@ class TsNet:
             logger.info("Epoch={}, train_prob_loss={}, val_prob_loss={}, "\
                     "L2(weights)={}".format(epoch+1, logs["prob_loss"],
                         logs["val_prob_loss"], self.weights_hist[-1]))
-
+            if self.corr_coef_pp>0:
+                logger.info("\tcorr_pp_loss={}".format(
+                    [logs["corr_pp_loss_" + str(i+1)]
+                        for i in xrange(self.num_outputs-1)]))
 
             # sample train data for testing
             if self.multiscale:
