@@ -56,7 +56,7 @@ class TsNet:
     def build_model(self, logdir=None):
 
         def corr_loss_func(y_true, y_pred):
-            return y_pred
+            return K.mean(y_pred * y_true)
         
         def corr_pp(x):
             pos_set1 = x[0]
@@ -66,7 +66,8 @@ class TsNet:
             gm2 = tf.matmul(pos_set2, pos_set2, transpose_a=True)
             logger.info("gm1.shape={}".format(gm1.shape))
             logger.info("gm2.shape={}".format(gm2.shape))
-            gm_mse = tf.reduce_mean(tf.square(gm1-gm2))
+            gm_mse = K.mean(K.batch_flatten(tf.square(gm1-gm2)),
+                    axis=0, keepdims=True)
             logger.info("gm_mse.shape={}".format(gm_mse.shape))
             return gm_mse
       
@@ -210,6 +211,7 @@ class TsNet:
                 self.num_channel], dtype=float)
             batch_pos_data1 = np.zeros_like(batch_data)
             batch_pos_data2 = np.zeros_like(batch_data)
+            batch_w = np.zeros_like(batch_label, dtype=float)
             uniq_scales = np.unique(scale_list)
             for w, scale in enumerate(uniq_scales):
                 sel_ix = np.where(scale_list==scale)[0]
@@ -221,8 +223,10 @@ class TsNet:
                 batch_data[sel_ix] = data[sample_idx[sel_ix], seq_slice]
                 batch_pos_data1[sel_ix] = data[pos_idx1[sel_ix], seq_slice]
                 batch_pos_data2[sel_ix] = data[pos_idx2[sel_ix], seq_slice]
+                batch_w[sel_ix] = 1.0 / self.batch_size
+            assert np.allclose(batch_w.sum(), 1.0), "batch_w.sum()={}".format(batch_w.sum())
             yield ([batch_data, batch_pos_data1, batch_pos_data2],
-                    [batch_label]*self.num_outputs)
+                    [batch_w]*(self.num_outputs-1) + [batch_label])
 
     def get_batch(self, data, labels):
         data_size = labels.size
@@ -234,7 +238,9 @@ class TsNet:
                     batch_label = np.ones(batch_data.shape[0]) * labels[i]
                     batch_weights = \
                             np.ones(batch_data.shape[0]) * self.scale_weights[s]
-                    yield ([batch_data]*3,
+                    rand_ix = np.arange(batch_data.shape[0])
+                    np.random.shuffle(rand_ix)
+                    yield ([batch_data]*2+[batch_data[rand_ix]],
                             [batch_label]*self.num_outputs,
                             [batch_weights]*self.num_outputs)
 
@@ -277,13 +283,16 @@ class TsNet:
                 log_likelihood = np.zeros_like(self.theta)
                 for s, scale in enumerate(self.scales):
                     probs = np.zeros(ll_test.size)
+                    corr_loss = 0.0
                     for i in xrange(ll_test.size):
                         batch_data = util.reshape(dd_test[i], self.win_size, scale)
                         preds_per_ts = self.model.predict_on_batch([batch_data] * 3)
                         probs[i] = preds_per_ts[-1].mean()
+                        for k in xrange(self.num_outputs-1):
+                            corr_loss += preds_per_ts[k].mean()
                     neg_mask = ll_test==0
                     probs[neg_mask] = 1-probs[neg_mask]
-                    log_likelihood[s] = np.mean(np.log(probs))
+                    log_likelihood[s] = np.mean(np.log(probs)) - self.corr_coef_pp * corr_loss
                 exp_theta = np.exp(self.theta)
                 y_s = exp_theta / exp_theta.sum()
                 self.theta += log_likelihood * y_s * (1-y_s) / T
