@@ -296,7 +296,10 @@ class TsNet:
                     self.theta, self.scale_weights))
 
             # save model if necessary
-            val_prob_loss = logs["val_prob_loss"]
+            if self.multiscale:
+                val_prob_loss = w_val_prob_loss
+            else:
+                val_prob_loss = logs["val_prob_loss"]
             if val_prob_loss <= self.min_val_prob_loss:
                 self.min_val_prob_loss = val_prob_loss
                 self.model.save_weights(bestmodelpath)
