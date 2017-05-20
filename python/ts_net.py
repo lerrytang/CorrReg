@@ -286,9 +286,6 @@ class TsNet:
                     neg_mask = ll_test==0
                     probs[neg_mask] = 1-probs[neg_mask] + 1e-12
                     log_likelihood[s] = np.mean(np.log(probs))
-                w_val_prob_loss = (-1 * log_likelihood * self.scale_weights).sum()
-                logger.info("\tw_val_prob_loss={}".format(w_val_prob_loss))
-#                logger.info("\tlog_likehood={}".format(log_likelihood))
                 exp_theta = np.exp(self.theta)
                 y_s = exp_theta / exp_theta.sum()
                 self.theta += log_likelihood * y_s * (1-y_s) / T
@@ -296,10 +293,7 @@ class TsNet:
                     self.theta, self.scale_weights))
 
             # save model if necessary
-            if self.multiscale:
-                val_prob_loss = w_val_prob_loss
-            else:
-                val_prob_loss = logs["val_prob_loss"]
+            val_prob_loss = logs["val_prob_loss"]
             if val_prob_loss <= self.min_val_prob_loss:
                 self.min_val_prob_loss = val_prob_loss
                 self.model.save_weights(bestmodelpath)
