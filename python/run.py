@@ -164,7 +164,7 @@ if __name__ == "__main__":
             help="ratio to downsample data")
     parser.add_argument("--win_size", default=4000, type=int,
             help="size of sliding window")
-    parser.add_argument("--batch_size", default=64, type=int,
+    parser.add_argument("--batch_size", default=256, type=int,
             help="training batch size")
     parser.add_argument("--max_epochs", default=75, type=int,
             help="maximum number of training epoches")
