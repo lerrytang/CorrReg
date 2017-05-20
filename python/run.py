@@ -124,8 +124,8 @@ def main(args):
         data_files = os.listdir(target_data_dir)
         test_data_files = np.sort([f for f in data_files if "test" in f])
         logger.info("#test_files = {}".format(test_data_files.size))
-        test_params = [(finalmodelpath, final_theta_path, "fin"),
-                (bestmodelpath, best_theta_path, "min")]
+        test_params = [(bestmodelpath, best_theta_path, "min"),
+                (finalmodelpath, final_theta_path, "fin")]
         for test_param in test_params:
             modelpath, thetapath, modeltype = test_param
             logger.info("Load {} model to test".format(modeltype))
@@ -166,8 +166,8 @@ if __name__ == "__main__":
             help="size of sliding window")
     parser.add_argument("--batch_size", default=64, type=int,
             help="training batch size")
-    parser.add_argument("--max_epochs", default=100, type=int,
-            help="maximum number of training iterations")
+    parser.add_argument("--max_epochs", default=75, type=int,
+            help="maximum number of training epoches")
     parser.add_argument("--n_folds", default=3, type=int,
             help="training batch size")
     parser.add_argument("--rand_seed", default=11, type=int,

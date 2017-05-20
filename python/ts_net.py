@@ -15,7 +15,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-DECAY_STEPS = 2000
+DECAY_STEPS = 1000
 DECAY_RATE = 0.95
 
 NUM_SCALES = 4
@@ -56,8 +56,8 @@ class TsNet:
 
         def corr_loss_func(y_true, y_pred):
             """
-            y_pred - flatten Gram matix of shape Bx(CxC)
-                     where B for batch_size, C for #filter
+            y_pred - flatten Gram matix of shape Bx(LxC)
+                     where B for batch_size, L for fea_len, C for #filter
             y_true - maks matrix of shape BxP,
                      where P is #positives in the batch
                      it looks like
@@ -66,18 +66,19 @@ class TsNet:
                      | 0 0 0 0 0 1 |
                      if B=6 and only the last 3 samples in the batch are positve
             """
-            pos_gram = K.dot(K.transpose(y_true), y_pred)
+            pos_gram = K.dot(K.transpose(y_true), y_pred)  #  Px(LxC)
             pos_std = K.std(pos_gram, axis=0)  # std accross the batch
-            return K.mean(pos_std)
+            return K.sum(pos_std)
 
         def corr_pp(x):
             """
             x is of shape BxLxC, where B for batch_size,
             L for seq_len, C for #filters
             """
-            gm = tf.matmul(x, x, transpose_a=True)
-            logger.info("gm.shape={}".format(gm.shape))
-            gm_flat = K.batch_flatten(gm)
+#            gm = tf.matmul(x, x, transpose_a=True)
+#            logger.info("gm.shape={}".format(gm.shape))
+#            gm_flat = K.batch_flatten(gm)
+            gm_flat = K.batch_flatten(x)
             return gm_flat
      
         # outputs
@@ -96,7 +97,8 @@ class TsNet:
         
         conv_params = [(32, 8, 4), (64, 5, 2), (64, 2, 2)]
         n_convs = len(conv_params)
-        loss_weights = [1.0 * self.corr_coef_pp / n_convs] * n_convs
+#        loss_weights = [1.0 * self.corr_coef_pp / n_convs] * n_convs
+        loss_weights = [self.corr_coef_pp]
         corr_layer = Lambda(corr_pp, name="corr_pp")
         for i, conv_param in enumerate(conv_params):
             num_filter, filter_size, pool_size = conv_param
@@ -109,13 +111,14 @@ class TsNet:
             # batch norm
             bn_layer = BatchNormalization()
             x_all_data = bn_layer(x_all_data)
+            if i==2:
+                # corr
+                corr_pp = corr_layer(x_all_data)
+                outputs.append(corr_pp)
+                losses.append(corr_loss_func)
             # relu
             activation_layer = Activation("relu")
             x_all_data = activation_layer(x_all_data)
-            # corr
-            corr_pp = corr_layer(x_all_data)
-            outputs.append(corr_pp)
-            losses.append(corr_loss_func)
 
         x_all_data = Flatten(name="flatten")(x_all_data)
         for i in xrange(2):
@@ -144,7 +147,9 @@ class TsNet:
         logger.info(outputs)
         logger.info(loss_weights)
         self.model = Model(inputs=[input_data], outputs=outputs)
+
         optimizer = optimizers.Adam(lr=self.init_lr, decay=1e-6)
+
         self.model.compile(optimizer=optimizer,
                 loss=losses, loss_weights=loss_weights)
 
@@ -204,6 +209,9 @@ class TsNet:
             batch_mask = np.zeros([self.batch_size, (batch_label==1).size])
             batch_mask[:, np.where(batch_label==1)[0]] = 1
             batch_mask = [batch_mask] * (self.num_outputs - 1)
+#            tmp = (batch_data - self.train_mean) / self.train_std
+#            logger.info("tmp.mean()={}".format(tmp.mean(axis=1)))
+#            logger.info("tmp.std()={}".format(tmp.std(axis=1)))
             yield([batch_data], batch_mask + [batch_label])
 
     def get_batch(self, data, labels):
@@ -252,9 +260,12 @@ class TsNet:
                         epoch+1, logs["loss"],logs["prob_loss"],
                         logs["val_prob_loss"], self.weights_hist[-1]))
             if self.corr_coef_pp>0:
-                logger.info("\tcorr_pp_loss={}".format(
-                    [logs["corr_pp_loss_" + str(i+1)]
-                        for i in xrange(self.num_outputs-1)]))
+                if self.num_outputs>2:
+                    logger.info("\tcorr_pp_loss={}".format(
+                        [logs["corr_pp_loss_" + str(i+1)]
+                            for i in xrange(self.num_outputs-1)]))
+                else:
+                    logger.info("\tcorr_pp_loss={}".format(logs["corr_pp_loss"]))
 
             # sample train data for testing
             if self.multiscale:
@@ -273,8 +284,11 @@ class TsNet:
                         preds_per_ts = self.model.predict_on_batch([batch_data])
                         probs[i] = preds_per_ts[-1].mean()
                     neg_mask = ll_test==0
-                    probs[neg_mask] = 1-probs[neg_mask]
+                    probs[neg_mask] = 1-probs[neg_mask] + 1e-12
                     log_likelihood[s] = np.mean(np.log(probs))
+                w_val_prob_loss = (-1 * log_likelihood * self.scale_weights).sum()
+                logger.info("\tw_val_prob_loss={}".format(w_val_prob_loss))
+#                logger.info("\tlog_likehood={}".format(log_likelihood))
                 exp_theta = np.exp(self.theta)
                 y_s = exp_theta / exp_theta.sum()
                 self.theta += log_likelihood * y_s * (1-y_s) / T
