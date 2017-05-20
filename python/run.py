@@ -150,8 +150,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--test", action="store_true", default=False,
             help="whether to test")
-    parser.add_argument("--data_rebalance", action="store_true", default=False,
-            help="whether to rebalance dataset")
     parser.add_argument("--multiscale", action="store_true", default=False,
             help="whether to apply multiscale sampling")
     parser.add_argument("--data_dir", default="../data",

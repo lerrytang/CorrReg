@@ -24,7 +24,6 @@ T = 0.2
 class TsNet:
 
     def __init__(self, args, train_mean, train_std, num_channel):
-        self.data_rebalance = args.data_rebalance
         self.reg_coef = args.reg_coef
         self.init_lr = args.init_lr
         self.win_size = args.win_size
@@ -56,21 +55,31 @@ class TsNet:
     def build_model(self, logdir=None):
 
         def corr_loss_func(y_true, y_pred):
-            return K.mean(y_pred * y_true)
-        
+            """
+            y_pred - flatten Gram matix of shape Bx(CxC)
+                     where B for batch_size, C for #filter
+            y_true - maks matrix of shape BxP,
+                     where P is #positives in the batch
+                     it looks like
+                     | 0 0 0 1 0 0 |
+                     | 0 0 0 0 1 0 |
+                     | 0 0 0 0 0 1 |
+                     if B=6 and only the last 3 samples in the batch are positve
+            """
+            pos_gram = K.dot(K.transpose(y_true), y_pred)
+            pos_std = K.std(pos_gram, axis=0)  # std accross the batch
+            return K.mean(pos_std)
+
         def corr_pp(x):
-            pos_set1 = x[0]
-            pos_set2 = x[1]
-            # gram matrix
-            gm1 = tf.matmul(pos_set1, pos_set1, transpose_a=True)
-            gm2 = tf.matmul(pos_set2, pos_set2, transpose_a=True)
-            logger.info("gm1.shape={}".format(gm1.shape))
-            logger.info("gm2.shape={}".format(gm2.shape))
-            gm_mse = K.mean(K.batch_flatten(tf.square(gm1-gm2)),
-                    axis=0, keepdims=True)
-            logger.info("gm_mse.shape={}".format(gm_mse.shape))
-            return gm_mse
-      
+            """
+            x is of shape BxLxC, where B for batch_size,
+            L for seq_len, C for #filters
+            """
+            gm = tf.matmul(x, x, transpose_a=True)
+            logger.info("gm.shape={}".format(gm.shape))
+            gm_flat = K.batch_flatten(gm)
+            return gm_flat
+     
         # outputs
         outputs = []
         losses = []
@@ -79,17 +88,11 @@ class TsNet:
         # inputs
         input_data = Input(shape=(self.win_size, self.num_channel),
                 dtype="float32", name="data")
-        pos_data1 = Input(shape=(self.win_size, self.num_channel),
-                dtype="float32", name="pos_data1")
-        pos_data2 = Input(shape=(self.win_size, self.num_channel),
-                dtype="float32", name="pos_data2")
-        
+       
         # data normalization
         norm_layer = Lambda(lambda x: (x - self.train_mean) / self.train_std,
                 name="normalization")
         x_all_data = norm_layer(input_data)
-        x_pos_data1 = norm_layer(pos_data1)
-        x_pos_data2 = norm_layer(pos_data2)
         
         conv_params = [(32, 8, 4), (64, 5, 2), (64, 2, 2)]
         n_convs = len(conv_params)
@@ -103,20 +106,14 @@ class TsNet:
                     kernel_regularizer=regularizers.l2(self.reg_coef),
                     name="conv" + str(i+1))
             x_all_data = conv_layer(x_all_data)
-            x_pos_data1 = conv_layer(x_pos_data1)
-            x_pos_data2 = conv_layer(x_pos_data2)
             # batch norm
             bn_layer = BatchNormalization()
             x_all_data = bn_layer(x_all_data)
-            x_pos_data1 = bn_layer(x_pos_data1)
-            x_pos_data2 = bn_layer(x_pos_data2)
             # relu
             activation_layer = Activation("relu")
             x_all_data = activation_layer(x_all_data)
-            x_pos_data1 = activation_layer(x_pos_data1)
-            x_pos_data2 = activation_layer(x_pos_data2)
             # corr
-            corr_pp = corr_layer([x_pos_data1, x_pos_data2])
+            corr_pp = corr_layer(x_all_data)
             outputs.append(corr_pp)
             losses.append(corr_loss_func)
 
@@ -146,8 +143,7 @@ class TsNet:
         self.num_outputs = len(outputs)
         logger.info(outputs)
         logger.info(loss_weights)
-        self.model = Model(inputs=[input_data, pos_data1, pos_data2],
-                outputs=outputs)
+        self.model = Model(inputs=[input_data], outputs=outputs)
         optimizer = optimizers.Adam(lr=self.init_lr, decay=1e-6)
         self.model.compile(optimizer=optimizer,
                 loss=losses, loss_weights=loss_weights)
@@ -175,11 +171,8 @@ class TsNet:
         logger.info("#pos_samples={}".format(pos_label_idx.size))
         num_pos_samples = np.sum(labels==1)
         num_neg_samples = np.sum(labels==0)
-        pos_sampling_weight = 1.0
-        if self.data_rebalance:
-            pos_sampling_weight *= (1.0 * num_neg_samples / num_pos_samples)
-        logger.info("pos_sampling_weight={}".format(
-            pos_sampling_weight))
+        pos_sampling_weight = (1.0 * num_neg_samples / num_pos_samples)
+        logger.info("pos_sampling_weight={}".format(pos_sampling_weight))
         sampling_weights = np.ones(data_size)
         sampling_weights[labels==1] *= pos_sampling_weight
         sampling_weights /= np.sum(sampling_weights)
@@ -189,31 +182,18 @@ class TsNet:
             sample_idx = np.random.choice(data_size, self.batch_size,
                     p=sampling_weights)
 
-            # prevent batches of only negative samples
-            if np.intersect1d(sample_idx, pos_label_idx).size == 0:
-                sample_idx[0] = pos_label_idx[np.random.randint(0,
-                    pos_label_idx.size)]
-
             batch_label = labels[sample_idx]
             assert np.any(batch_label==1)
 
             sample_idx = np.expand_dims(sample_idx, -1)
-            pos_idx1 = np.expand_dims(
-                    np.random.choice(pos_label_idx, self.batch_size), -1)
-            pos_idx2 = np.expand_dims(
-                    np.random.choice(pos_label_idx, self.batch_size), -1)
 
             # sample scales
-            scale_list = np.random.choice(self.scales,
-                    self.batch_size,
+            scale_list = np.random.choice(self.scales, self.batch_size,
                     p=self.scale_weights if self.multiscale else None)
             batch_data = np.zeros([self.batch_size, self.win_size,
                 self.num_channel], dtype=float)
-            batch_pos_data1 = np.zeros_like(batch_data)
-            batch_pos_data2 = np.zeros_like(batch_data)
-            batch_w = np.zeros_like(batch_label, dtype=float)
             uniq_scales = np.unique(scale_list)
-            for w, scale in enumerate(uniq_scales):
+            for scale in uniq_scales:
                 sel_ix = np.where(scale_list==scale)[0]
                 rand_start = np.random.randint(0,
                         seq_len - self.win_size * scale + 1, sel_ix.size)
@@ -221,12 +201,10 @@ class TsNet:
                     ss + self.win_size * scale, scale)
                     for ss in rand_start])
                 batch_data[sel_ix] = data[sample_idx[sel_ix], seq_slice]
-                batch_pos_data1[sel_ix] = data[pos_idx1[sel_ix], seq_slice]
-                batch_pos_data2[sel_ix] = data[pos_idx2[sel_ix], seq_slice]
-                batch_w[sel_ix] = 1.0 / self.batch_size
-            assert np.allclose(batch_w.sum(), 1.0), "batch_w.sum()={}".format(batch_w.sum())
-            yield ([batch_data, batch_pos_data1, batch_pos_data2],
-                    [batch_w]*(self.num_outputs-1) + [batch_label])
+            batch_mask = np.zeros([self.batch_size, (batch_label==1).size])
+            batch_mask[:, np.where(batch_label==1)[0]] = 1
+            batch_mask = [batch_mask] * (self.num_outputs - 1)
+            yield([batch_data], batch_mask + [batch_label])
 
     def get_batch(self, data, labels):
         data_size = labels.size
@@ -235,14 +213,21 @@ class TsNet:
             for s, scale in enumerate(self.scales):
                 for i in xrange(data_size):
                     batch_data = util.reshape(data[i], self.win_size, scale)
-                    batch_label = np.ones(batch_data.shape[0]) * labels[i]
-                    batch_weights = \
-                            np.ones(batch_data.shape[0]) * self.scale_weights[s]
-                    rand_ix = np.arange(batch_data.shape[0])
-                    np.random.shuffle(rand_ix)
-                    yield ([batch_data]*2+[batch_data[rand_ix]],
-                            [batch_label]*self.num_outputs,
-                            [batch_weights]*self.num_outputs)
+                    bsize = batch_data.shape[0]
+                    batch_label = np.ones(bsize) * labels[i]
+                    batch_weights = np.ones(bsize) * self.scale_weights[s]
+                    batch_weights = [batch_weights] * self.num_outputs
+                    if labels[i]==1:
+                        batch_mask = np.eye(batch_data.shape[0])
+                    else:
+                        batch_mask = np.zeros([bsize, 2])
+                        # select only the first sample such that var=0
+                        batch_mask[:, 0] = 1
+                    batch_mask = [batch_mask] * (self.num_outputs - 1)
+                    if self.multiscale:
+                        yield([batch_data], batch_mask+[batch_label], batch_weights)
+                    else:
+                        yield([batch_data], batch_mask+[batch_label])
 
     def train(self, train_data, train_label, valid_data, valid_label,
             logdir, bestmodelpath, finalmodelpath,
@@ -283,16 +268,13 @@ class TsNet:
                 log_likelihood = np.zeros_like(self.theta)
                 for s, scale in enumerate(self.scales):
                     probs = np.zeros(ll_test.size)
-                    corr_loss = 0.0
                     for i in xrange(ll_test.size):
                         batch_data = util.reshape(dd_test[i], self.win_size, scale)
-                        preds_per_ts = self.model.predict_on_batch([batch_data] * 3)
+                        preds_per_ts = self.model.predict_on_batch([batch_data])
                         probs[i] = preds_per_ts[-1].mean()
-                        for k in xrange(self.num_outputs-1):
-                            corr_loss += preds_per_ts[k].mean()
                     neg_mask = ll_test==0
                     probs[neg_mask] = 1-probs[neg_mask]
-                    log_likelihood[s] = np.mean(np.log(probs)) - self.corr_coef_pp * corr_loss
+                    log_likelihood[s] = np.mean(np.log(probs))
                 exp_theta = np.exp(self.theta)
                 y_s = exp_theta / exp_theta.sum()
                 self.theta += log_likelihood * y_s * (1-y_s) / T
@@ -323,10 +305,6 @@ class TsNet:
                     min_delta=0.0001,
                     patience=10,
                     mode="min"),
-#                keras.callbacks.TensorBoard(
-#                    log_dir=logdir,
-#                    histogram_freq=2,
-#                    write_images=True),
                 ],
             verbose=verbose,
             epochs=self.max_epochs
@@ -354,7 +332,7 @@ class TsNet:
             for j, scale in enumerate(self.scales):
                 batch_data = util.reshape(test_data,
                         self.win_size, scale)
-                preds_per_ts = self.model.predict_on_batch([batch_data] * 3)
+                preds_per_ts = self.model.predict_on_batch([batch_data])
                 prob_matrix[i, j] = preds_per_ts[-1].mean()
         probs = prob_matrix.dot(self.scale_weights)
         return probs
