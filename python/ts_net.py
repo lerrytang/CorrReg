@@ -1,7 +1,7 @@
 import keras
 import keras.backend as K
-from keras.layers import Input, Conv1D, Dense, Flatten, Lambda
-from keras.layers import Activation, BatchNormalization
+from keras.layers import Input, Conv1D, Dense, Flatten, Lambda, Activation
+#from keras.layers import BatchNormalization
 from keras.models import Model
 from keras.losses import binary_crossentropy
 from keras import regularizers, optimizers
@@ -29,7 +29,7 @@ class TsNet:
         self.win_size = args.win_size
         self.batch_size = args.batch_size
         self.max_epochs = args.max_epochs
-        self.corr_coef_pp = args.corr_coef_pp
+        self.corr_reg = args.corr_reg
         self.downsample = args.downsample
         self.test_data_dir = os.path.join(args.data_dir, args.target_obj)
         self.train_mean = train_mean
@@ -56,8 +56,8 @@ class TsNet:
 
         def corr_loss_func(y_true, y_pred):
             """
-            y_pred - flatten Gram matix of shape Bx(LxC)
-                     where B for batch_size, L for fea_len, C for #filter
+            y_pred - flatten Gram matix of shape Bx(CxC)
+                     where B for batch_size, C for #filter
             y_true - maks matrix of shape BxP,
                      where P is #positives in the batch
                      it looks like
@@ -66,19 +66,18 @@ class TsNet:
                      | 0 0 0 0 0 1 |
                      if B=6 and only the last 3 samples in the batch are positve
             """
-            pos_gram = K.dot(K.transpose(y_true), y_pred)  #  Px(LxC)
-            pos_std = K.std(pos_gram, axis=0)  # std accross the batch
-            return K.sum(pos_std)
+            pos_gram = K.dot(K.transpose(y_true), y_pred)  #  Px(CxC)
+            pos_std = K.var(pos_gram, axis=0)  # var accross the batch
+            return K.mean(pos_std)
 
         def corr_pp(x):
             """
             x is of shape BxLxC, where B for batch_size,
             L for seq_len, C for #filters
             """
-#            gm = tf.matmul(x, x, transpose_a=True)
-#            logger.info("gm.shape={}".format(gm.shape))
-#            gm_flat = K.batch_flatten(gm)
-            gm_flat = K.batch_flatten(x)
+            gm = tf.matmul(x, x, transpose_a=True)
+            logger.info("gm.shape={}".format(gm.shape))
+            gm_flat = K.batch_flatten(gm)
             return gm_flat
      
         # outputs
@@ -97,8 +96,8 @@ class TsNet:
         
         conv_params = [(32, 8, 4), (64, 5, 2), (64, 2, 2)]
         n_convs = len(conv_params)
-#        loss_weights = [1.0 * self.corr_coef_pp / n_convs] * n_convs
-        loss_weights = [self.corr_coef_pp]
+#        loss_weights = [1.0 * self.corr_reg / n_convs] * n_convs
+        loss_weights = [self.corr_reg]
         corr_layer = Lambda(corr_pp, name="corr_pp")
         for i, conv_param in enumerate(conv_params):
             num_filter, filter_size, pool_size = conv_param
@@ -108,17 +107,26 @@ class TsNet:
                     kernel_regularizer=regularizers.l2(self.reg_coef),
                     name="conv" + str(i+1))
             x_all_data = conv_layer(x_all_data)
-            # batch norm
-            bn_layer = BatchNormalization()
-            x_all_data = bn_layer(x_all_data)
-            if i==2:
-                # corr
-                corr_pp = corr_layer(x_all_data)
-                outputs.append(corr_pp)
-                losses.append(corr_loss_func)
+#            # batch norm
+#            bn_layer = BatchNormalization()
+#            x_all_data = bn_layer(x_all_data)
+#            if i==2:
+#                # corr
+#                corr_pp = corr_layer(x_all_data)
+#                outputs.append(corr_pp)
+#                losses.append(corr_loss_func)
             # relu
             activation_layer = Activation("relu")
             x_all_data = activation_layer(x_all_data)
+#            # corr
+#            corr_pp = corr_layer(x_all_data)
+#            outputs.append(corr_pp)
+#            losses.append(corr_loss_func)
+
+        # corr
+        corr_pp = corr_layer(x_all_data)
+        outputs.append(corr_pp)
+        losses.append(corr_loss_func)
 
         x_all_data = Flatten(name="flatten")(x_all_data)
         for i in xrange(2):
@@ -126,17 +134,15 @@ class TsNet:
             x_all_data = Dense(1024,
                     kernel_regularizer=regularizers.l2(self.reg_coef),
                     name="fc" + str(i+1))(x_all_data)
-            # BN
-            bn_layer = BatchNormalization()
-            x_all_data = bn_layer(x_all_data)
+#            # BN
+#            bn_layer = BatchNormalization()
+#            x_all_data = bn_layer(x_all_data)
             # relu
             activation_layer = Activation("relu")
             x_all_data = activation_layer(x_all_data)
 
         # output
-        x_all_data = Dense(1, kernel_initializer="uniform")(x_all_data)
-        x_all_data = BatchNormalization()(x_all_data)
-        prob = Activation("sigmoid", name="prob")(x_all_data)
+        prob = Dense(1, activation="sigmoid", name="prob")(x_all_data)
         
         outputs.append(prob)
         losses.append(binary_crossentropy)
@@ -148,7 +154,7 @@ class TsNet:
         logger.info(loss_weights)
         self.model = Model(inputs=[input_data], outputs=outputs)
 
-        optimizer = optimizers.Adam(lr=self.init_lr, decay=1e-6)
+        optimizer = optimizers.Adam(lr=self.init_lr, decay=1e-5)
 
         self.model.compile(optimizer=optimizer,
                 loss=losses, loss_weights=loss_weights)
@@ -257,9 +263,9 @@ class TsNet:
             # print stats
             logger.info("Epoch={}, train_loss={}, train_prob_loss={}, "\
                     "val_prob_loss={}, L2(weights)={}".format(
-                        epoch+1, logs["loss"],logs["prob_loss"],
+                        epoch+1, logs["loss"], logs["prob_loss"],
                         logs["val_prob_loss"], self.weights_hist[-1]))
-            if self.corr_coef_pp>0:
+            if self.corr_reg>0:
                 if self.num_outputs>2:
                     logger.info("\tcorr_pp_loss={}".format(
                         [logs["corr_pp_loss_" + str(i+1)]
@@ -284,7 +290,7 @@ class TsNet:
                         preds_per_ts = self.model.predict_on_batch([batch_data])
                         probs[i] = preds_per_ts[-1].mean()
                     neg_mask = ll_test==0
-                    probs[neg_mask] = 1-probs[neg_mask] + 1e-12
+                    probs[neg_mask] = 1-probs[neg_mask]
                     log_likelihood[s] = np.mean(np.log(probs))
                 exp_theta = np.exp(self.theta)
                 y_s = exp_theta / exp_theta.sum()

@@ -52,6 +52,7 @@ def main(args):
 
     # CV
     for fold_i in xrange(args.n_folds):
+        if fold_i==0: continue
         logger.info("---------------")
         logger.info("<fold {}>".format(fold_i))
 
@@ -158,15 +159,15 @@ if __name__ == "__main__":
             help="directory of mean and std files")
     parser.add_argument("--logdir", default="./log",
             help="directory to store logs")
-    parser.add_argument("--corr_coef_pp", default=0.0, type=float,
-            help="coefficient for triplet loss (positive and positive")
+    parser.add_argument("--corr_reg", default=0.0, type=float,
+            help="coefficient for CorrReg")
     parser.add_argument("--downsample", default=0, type=int,
             help="ratio to downsample data")
     parser.add_argument("--win_size", default=4000, type=int,
             help="size of sliding window")
     parser.add_argument("--batch_size", default=256, type=int,
             help="training batch size")
-    parser.add_argument("--max_epochs", default=75, type=int,
+    parser.add_argument("--max_epochs", default=100, type=int,
             help="maximum number of training epoches")
     parser.add_argument("--n_folds", default=3, type=int,
             help="training batch size")
