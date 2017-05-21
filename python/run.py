@@ -52,7 +52,6 @@ def main(args):
 
     # CV
     for fold_i in xrange(args.n_folds):
-        if fold_i==0: continue
         logger.info("---------------")
         logger.info("<fold {}>".format(fold_i))
 
@@ -80,9 +79,13 @@ def main(args):
             train_std = npzfile["train_std"]
         else:
             logger.info("Calculating mean and std ...")
-            tmp = data[train_indice].reshape([-1, num_ch])
-            train_mean = np.mean(tmp, axis=0)
-            train_std = np.std(tmp, axis=0)
+            tmp_mean = np.mean(data[train_indice], axis=1)
+            tmp_std = np.std(data[train_indice], axis=1)
+            train_mean = np.mean(tmp_mean, axis=0)
+            train_std = np.mean(tmp_std, axis=0)
+#            tmp = data[train_indice].reshape([-1, num_ch])
+#            train_mean = np.mean(tmp, axis=0)
+#            train_std = np.std(tmp, axis=0)
         logger.info("train_mean.shape={}".format(train_mean.shape))
         logger.info("train_mean={}".format(train_mean))
         logger.info("train_std.shape={}".format(train_std.shape))
