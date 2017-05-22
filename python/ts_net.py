@@ -291,6 +291,11 @@ class TsNet:
                         probs[i] = preds_per_ts[-1].mean()
                     neg_mask = ll_test==0
                     probs[neg_mask] = 1-probs[neg_mask]
+                    # although sigmoid should not be 0, numerically it can
+                    # to prevent log from outputting -Inf, add a tiny amount
+                    if np.any(probs==0):
+                        logger.info("Found 0 probability in probs!")
+                        probs[probs==0] = 1e-12
                     log_likelihood[s] = np.mean(np.log(probs))
                 exp_theta = np.exp(self.theta)
                 y_s = exp_theta / exp_theta.sum()
@@ -317,11 +322,11 @@ class TsNet:
             callbacks=[
                 keras.callbacks.LambdaCallback(
                     on_epoch_end=update_theta),
-                keras.callbacks.EarlyStopping(
-                    monitor="val_prob_loss",
-                    min_delta=0.0001,
-                    patience=10,
-                    mode="min"),
+#                keras.callbacks.EarlyStopping(
+#                    monitor="val_prob_loss",
+#                    min_delta=0.0001,
+#                    patience=10,
+#                    mode="min"),
                 ],
             verbose=verbose,
             epochs=self.max_epochs
