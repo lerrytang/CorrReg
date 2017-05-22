@@ -50,6 +50,27 @@ def main(args):
     logger.info("num_seq={}, seq_len={}, num_ch={}".format(
         num_seq, seq_len, num_ch))
 
+    # calculate mean and std of the dataset
+    npzdir = os.path.join(args.train_mean_std_dir, args.target_obj)
+    npzfile = os.path.join(npzdir, "train_mean_std.npz")
+    if os.path.exists(npzfile):
+        logger.info("Loading from {} ...".format(npzfile))
+        npzdata = np.load(npzfile)
+        all_mean = npzdata["all_mean"]
+        all_std = npzdata["all_std"]
+    else:
+        logger.info("Calculating mean and std ...")
+        all_mean = np.mean(data, axis=1)
+        all_std = np.std(data, axis=1)
+    logger.info("all_mean.shape={}".format(all_mean.shape))
+    logger.info("all_mean={}".format(all_mean))
+    logger.info("all_std.shape={}".format(all_std.shape))
+    logger.info("all_std={}".format(all_std))
+    if not os.path.exists(npzdir):
+        os.makedirs(npzdir)
+    if not os.path.exists(npzfile):
+        np.savez(npzfile, all_mean=all_mean, all_std=all_std)
+
     # CV
     for fold_i in xrange(args.n_folds):
         logger.info("---------------")
@@ -69,33 +90,10 @@ def main(args):
             valid_indice.size - labels[valid_indice].sum(),
             labels[valid_indice].mean()))
     
-        # calculate mean and std
-        npzdir = os.path.join(args.train_mean_std_dir, args.target_obj)
-        filename = "train_mean_std_fold{}.npz".format(fold_i)
-        if os.path.exists(os.path.join(npzdir, filename)):
-            logger.info("Loading {} ...".format(filename))
-            npzfile = np.load(os.path.join(npzdir, filename))
-            train_mean = npzfile["train_mean"]
-            train_std = npzfile["train_std"]
-        else:
-            logger.info("Calculating mean and std ...")
-            tmp_mean = np.mean(data[train_indice], axis=1)
-            tmp_std = np.std(data[train_indice], axis=1)
-            train_mean = np.mean(tmp_mean, axis=0)
-            train_std = np.mean(tmp_std, axis=0)
-#            tmp = data[train_indice].reshape([-1, num_ch])
-#            train_mean = np.mean(tmp, axis=0)
-#            train_std = np.std(tmp, axis=0)
-        logger.info("train_mean.shape={}".format(train_mean.shape))
-        logger.info("train_mean={}".format(train_mean))
-        logger.info("train_std.shape={}".format(train_std.shape))
-        logger.info("train_std={}".format(train_std))
-        np.savez(os.path.join(logdir, filename),
-                train_mean=train_mean,
-                train_std=train_std)
-
         # build net
         logger.info("Build model")
+        train_mean = all_mean[train_indice].mean(axis=0)
+        train_std = all_std[train_indice].mean(axis=0)
         model = TsNet(args, train_mean, train_std, num_ch)
         model.build_model(logdir=logdir if fold_i==0 else None)
     
