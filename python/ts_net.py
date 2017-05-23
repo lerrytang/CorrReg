@@ -157,7 +157,8 @@ class TsNet:
         optimizer = optimizers.Adam(lr=self.init_lr, decay=1e-5)
 
         self.model.compile(optimizer=optimizer,
-                loss=losses, loss_weights=loss_weights)
+                loss=losses, loss_weights=loss_weights,
+                metrics=["acc"])
 
         if logdir is not None:
             from keras.utils import plot_model
@@ -253,7 +254,7 @@ class TsNet:
                 "validation_steps={}".format(
                     self.max_epochs, steps_per_epoch, validation_steps))
 
-        self.min_val_prob_loss = np.inf
+        self.best_acc = 0.0
 
         def update_theta(epoch, logs):
 
@@ -261,17 +262,16 @@ class TsNet:
             self.weights_squared_sum()
 
             # print stats
-            logger.info("Epoch={}, train_loss={}, train_prob_loss={}, "\
-                    "val_prob_loss={}, L2(weights)={}".format(
-                        epoch+1, logs["loss"], logs["prob_loss"],
-                        logs["val_prob_loss"], self.weights_hist[-1]))
-            if self.corr_reg>0:
-                if self.num_outputs>2:
-                    logger.info("\tcorr_pp_loss={}".format(
-                        [logs["corr_pp_loss_" + str(i+1)]
-                            for i in xrange(self.num_outputs-1)]))
-                else:
-                    logger.info("\tcorr_pp_loss={}".format(logs["corr_pp_loss"]))
+            logger.info("Epoch={0}, L2(weights)={1:.2f}".format(
+                epoch+1, self.weights_hist[-1]))
+            logger.info("\ttrain_loss={0:.4f}, train_prob_loss={1:.4f}, "\
+                    "train_corr_loss={2:.4f}, train_acc={3:.2f}".format(
+                        logs["loss"], logs["prob_loss"],
+                        logs["corr_pp_loss"], logs["prob_acc"]))
+            logger.info("\tval_loss={0:.4f}, val_prob_loss={1:.4f}, "\
+                    "val_corr_loss={2:.4f}, val_acc={3:.2f}".format(
+                        logs["val_loss"], logs["val_prob_loss"],
+                        logs["val_corr_pp_loss"], logs["val_prob_acc"]))
 
             # sample train data for testing
             if self.multiscale:
@@ -295,7 +295,7 @@ class TsNet:
                     # to prevent log from outputting -Inf, add a tiny amount
                     if np.any(probs==0):
                         logger.info("Found 0 probability in probs!")
-                        probs[probs==0] = 1e-12
+                        probs[probs==0] = 1e-8
                     log_likelihood[s] = np.mean(np.log(probs))
                 exp_theta = np.exp(self.theta)
                 y_s = exp_theta / exp_theta.sum()
@@ -304,9 +304,9 @@ class TsNet:
                     self.theta, self.scale_weights))
 
             # save model if necessary
-            val_prob_loss = logs["val_prob_loss"]
-            if val_prob_loss <= self.min_val_prob_loss:
-                self.min_val_prob_loss = val_prob_loss
+            val_acc = logs["val_prob_acc"]
+            if val_acc >= self.best_acc:
+                self.best_acc = val_acc
                 self.model.save_weights(bestmodelpath)
                 if self.multiscale:
                     np.savez(best_theta_path, theta=self.theta)
