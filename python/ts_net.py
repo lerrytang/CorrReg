@@ -15,9 +15,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-DECAY_STEPS = 1000
-DECAY_RATE = 0.95
-
 NUM_SCALES = 4
 T = 0.2
 
@@ -96,7 +93,6 @@ class TsNet:
         
         conv_params = [(32, 8, 4), (64, 5, 2), (64, 2, 2)]
         n_convs = len(conv_params)
-#        loss_weights = [1.0 * self.corr_reg / n_convs] * n_convs
         loss_weights = [self.corr_reg]
         corr_layer = Lambda(corr_pp, name="corr_pp")
         for i, conv_param in enumerate(conv_params):
@@ -107,21 +103,9 @@ class TsNet:
                     kernel_regularizer=regularizers.l2(self.reg_coef),
                     name="conv" + str(i+1))
             x_all_data = conv_layer(x_all_data)
-#            # batch norm
-#            bn_layer = BatchNormalization()
-#            x_all_data = bn_layer(x_all_data)
-#            if i==2:
-#                # corr
-#                corr_pp = corr_layer(x_all_data)
-#                outputs.append(corr_pp)
-#                losses.append(corr_loss_func)
             # relu
             activation_layer = Activation("relu")
             x_all_data = activation_layer(x_all_data)
-#            # corr
-#            corr_pp = corr_layer(x_all_data)
-#            outputs.append(corr_pp)
-#            losses.append(corr_loss_func)
 
         # corr
         corr_pp = corr_layer(x_all_data)
@@ -134,9 +118,6 @@ class TsNet:
             x_all_data = Dense(1024,
                     kernel_regularizer=regularizers.l2(self.reg_coef),
                     name="fc" + str(i+1))(x_all_data)
-#            # BN
-#            bn_layer = BatchNormalization()
-#            x_all_data = bn_layer(x_all_data)
             # relu
             activation_layer = Activation("relu")
             x_all_data = activation_layer(x_all_data)
@@ -215,9 +196,6 @@ class TsNet:
             batch_mask = np.zeros([self.batch_size, (batch_label==1).size])
             batch_mask[:, np.where(batch_label==1)[0]] = 1
             batch_mask = [batch_mask] * (self.num_outputs - 1)
-#            tmp = (batch_data - self.train_mean) / self.train_std
-#            logger.info("tmp.mean()={}".format(tmp.mean(axis=1)))
-#            logger.info("tmp.std()={}".format(tmp.std(axis=1)))
             yield([batch_data], batch_mask + [batch_label])
 
     def get_batch(self, data, labels):
@@ -243,17 +221,12 @@ class TsNet:
                     else:
                         yield([batch_data], batch_mask+[batch_label])
 
-    def train(self, train_data, train_label, valid_data, valid_label,
-            logdir, bestmodelpath, finalmodelpath,
-            best_theta_path=None, final_theta_path=None, verbose=0):
+    def train(self, train_data, train_label, logdir,
+            modelpath=None, thetapath=None, verbose=0):
 
         steps_per_epoch = 200
-        validation_steps = valid_data.shape[0]
-        logger.info("max_epochs={}, steps_per_epoch={}, "\
-                "validation_steps={}".format(
-                    self.max_epochs, steps_per_epoch, validation_steps))
-
-        self.min_val_prob_loss = np.inf
+        logger.info("max_epochs={}, steps_per_epoch={}".format(
+                    self.max_epochs, steps_per_epoch))
 
         def update_theta(epoch, logs):
 
@@ -261,22 +234,16 @@ class TsNet:
             self.weights_squared_sum()
 
             # print stats
-            logger.info("Epoch={}, train_loss={}, train_prob_loss={}, "\
-                    "val_prob_loss={}, L2(weights)={}".format(
+            logger.info("Epoch={}, loss={}, prob_loss={}, "\
+                    "corr?loss={}, L2(weights)={}".format(
                         epoch+1, logs["loss"], logs["prob_loss"],
-                        logs["val_prob_loss"], self.weights_hist[-1]))
-            if self.corr_reg>0:
-                if self.num_outputs>2:
-                    logger.info("\tcorr_pp_loss={}".format(
-                        [logs["corr_pp_loss_" + str(i+1)]
-                            for i in xrange(self.num_outputs-1)]))
-                else:
-                    logger.info("\tcorr_pp_loss={}".format(logs["corr_pp_loss"]))
+                        logs["corr_pp_loss"], self.weights_hist[-1]))
 
             # sample train data for testing
             if self.multiscale:
+                valid_size = train_label.size / 3
                 rand_ix = np.random.choice(train_label.size,
-                        valid_label.size, replace=False)
+                        valid_size, replace=False)
                 ll_test = train_label[rand_ix]
                 dd_test = train_data[rand_ix]
                 logger.info("Updating theta ...")
@@ -303,40 +270,24 @@ class TsNet:
                 logger.info("\tAfter update: theta={}, scale_weights={}".format(
                     self.theta, self.scale_weights))
 
-            # save model if necessary
-            val_prob_loss = logs["val_prob_loss"]
-            if val_prob_loss <= self.min_val_prob_loss:
-                self.min_val_prob_loss = val_prob_loss
-                self.model.save_weights(bestmodelpath)
-                if self.multiscale:
-                    np.savez(best_theta_path, theta=self.theta)
-                logger.info("Best model updated.")
-
             logger.info("-"*50)
 
         train_hist = self.model.fit_generator(
             generator=self.get_rand_batch(train_data, train_label),
             steps_per_epoch=steps_per_epoch,
-            validation_data=self.get_batch(valid_data, valid_label),
-            validation_steps=self.scales.size*valid_label.size,
             callbacks=[
                 keras.callbacks.LambdaCallback(
                     on_epoch_end=update_theta),
-#                keras.callbacks.EarlyStopping(
-#                    monitor="val_prob_loss",
-#                    min_delta=0.0001,
-#                    patience=10,
-#                    mode="min"),
                 ],
             verbose=verbose,
             epochs=self.max_epochs
             )
 
-        logger.info("Saving final model ...")
-        self.model.save_weights(finalmodelpath)
-        if final_theta_path is not None:
-            logger.info("Saving theta to {}".format(final_theta_path))
-            np.savez(final_theta_path, theta=self.theta)
+        logger.info("Saving model ...")
+        self.model.save_weights(modelpath)
+        if thetapath is not None:
+            logger.info("Saving theta to {}".format(thetapath))
+            np.savez(thetapath, theta=self.theta)
         logger.info("Model saved.")
 
         train_hist.history["weights_squared_sum"] = self.weights_hist

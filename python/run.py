@@ -13,21 +13,6 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger(__name__)
 
 
-def merge_results(logdir, prefix="min"):
-    output_files = [f for f in os.listdir(logdir) if f[:3]==prefix]
-    res = None
-    for f in output_files:
-        tmp = pd.read_csv(os.path.join(logdir, f), index_col=0, header=None)
-        if res is None:
-            res = tmp
-        else:
-            res = res + tmp
-    res /= len(output_files)
-    res.to_csv(os.path.join(logdir, "submit_{}.csv".format(prefix)),
-            header=False)
-    return res
-
-
 def main(args):
     for arg in vars(args):
         logger.info("{} = {}".format(arg, getattr(args, arg)))
@@ -42,10 +27,6 @@ def main(args):
     logger.info("target_data_dir={}".format(target_data_dir))
     data, labels, pos_ix, neg_ix =\
             util.load_train_data(target_data_dir, args.downsample)
-    train_ix, valid_ix = util.split_to_folds(pos_ix, neg_ix, args.n_folds)
-    split_file = os.path.join(logdir, "train_valid_split.pkl")
-    with open(split_file, "wb") as f:
-        pickle.dump((train_ix, valid_ix), f)
     num_seq, seq_len, num_ch = data.shape
     logger.info("num_seq={}, seq_len={}, num_ch={}".format(
         num_seq, seq_len, num_ch))
@@ -71,81 +52,44 @@ def main(args):
     if not os.path.exists(npzfile):
         np.savez(npzfile, all_mean=all_mean, all_std=all_std)
 
-    # CV
-    for fold_i in xrange(args.n_folds):
-        logger.info("---------------")
-        logger.info("<fold {}>".format(fold_i))
-
-        # split data
-        train_indice = train_ix[fold_i]
-        valid_indice = valid_ix[fold_i]
-        logger.info("train_ix={}".format(train_indice))
-        logger.info("valid_ix={}".format(valid_indice))
-        logger.info("train: #pos={}, #neg={}, %pos={}".format(
-            labels[train_indice].sum(),
-            train_indice.size - labels[train_indice].sum(),
-            labels[train_indice].mean()))
-        logger.info("valid: #pos={}, #neg={}, %pos={}".format(
-            labels[valid_indice].sum(),
-            valid_indice.size - labels[valid_indice].sum(),
-            labels[valid_indice].mean()))
+    # build net
+    logger.info("Build model")
+    train_mean = all_mean.mean(axis=0)
+    train_std = all_std.mean(axis=0)
+    model = TsNet(args, train_mean, train_std, num_ch)
+    model.build_model(logdir=logdir)
     
-        # build net
-        logger.info("Build model")
-        train_mean = all_mean[train_indice].mean(axis=0)
-        train_std = all_std[train_indice].mean(axis=0)
-        model = TsNet(args, train_mean, train_std, num_ch)
-        model.build_model(logdir=logdir if fold_i==0 else None)
-    
-        modeldir = os.path.join(logdir, "model")
-        bestmodelpath = os.path.join(modeldir,
-                "best_model_fold" + str(fold_i) + ".h5")
-        finalmodelpath = os.path.join(modeldir,
-                "final_model_fold" + str(fold_i) + ".h5")
-        if args.multiscale:
-            best_theta_path = os.path.join(modeldir,
-                    "best_theta_fold" + str(fold_i) + ".npz")
-            final_theta_path = os.path.join(modeldir,
-                    "final_theta_fold" + str(fold_i) + ".npz")
-        else:
-            best_theta_path = None
-            final_theta_path = None
+    modeldir = os.path.join(logdir, "model")
+    modelpath = os.path.join(modeldir, "model_{}.h5".format(args.max_epochs))
+    if args.multiscale:
+        thetapath = os.path.join(modeldir, "theta_{}.npz".format(args.max_epochs))
+    else:
+        thetapath = None
 
-        # train
-        if not args.test:
-            train_hist = model.train(data[train_indice], labels[train_indice],
-                    data[valid_indice], labels[valid_indice],
-                    logdir, bestmodelpath, finalmodelpath,
-                    best_theta_path, final_theta_path, args.verbose)
-            # log training history
-            hist_file = os.path.join(logdir, "hist_fold"+str(fold_i)+".pkl")
-            with open(hist_file, "wb") as f:
-                pickle.dump(train_hist.history, f)
+    # train
+    if not args.test:
+        train_hist = model.train(data, labels, logdir,
+                modelpath, thetapath, args.verbose)
+        # log training history
+        hist_file = os.path.join(logdir, "hist_{}.pkl".format(args.max_epochs))
+        with open(hist_file, "wb") as f:
+            pickle.dump(train_hist.history, f)
     
-        # test
-        data_files = os.listdir(target_data_dir)
-        test_data_files = np.sort([f for f in data_files if "test" in f])
-        logger.info("#test_files = {}".format(test_data_files.size))
-        test_params = [(bestmodelpath, best_theta_path, "min"),
-                (finalmodelpath, final_theta_path, "fin")]
-        for test_param in test_params:
-            modelpath, thetapath, modeltype = test_param
-            logger.info("Load {} model to test".format(modeltype))
-            model.model.load_weights(modelpath)
-            if args.multiscale:
-                theta_file = np.load(thetapath)
-                model.model.theta = theta_file["theta"]
-                logger.info("model.model.theta={}".format(
-                    model.model.theta))
-            preds = model.test_on_data(test_data_files)
-            output = pd.Series(preds, index=test_data_files)
-            output_file = os.path.join(logdir,
-                    "{}_fold{}.csv".format(modeltype, fold_i))
-            output.to_csv(output_file)
-            logger.info("Test result written to {}.".format(output_file))
-
-    merge_results(logdir)
-    merge_results(logdir, "fin")
+    # test
+    data_files = os.listdir(target_data_dir)
+    test_data_files = np.sort([f for f in data_files if "test" in f])
+    logger.info("#test_files = {}".format(test_data_files.size))
+    logger.info("Loading {} to test ...".format(modelpath))
+    model.model.load_weights(modelpath)
+    if args.multiscale:
+        theta_file = np.load(thetapath)
+        model.model.theta = theta_file["theta"]
+        logger.info("model.model.theta={}".format(model.model.theta))
+    preds = model.test_on_data(test_data_files)
+    output = pd.Series(preds, index=test_data_files)
+    output_file = os.path.join(logdir, "{}_preds.csv".format(args.target_obj))
+    output.to_csv(output_file)
+    logger.info("Test result written to {}.".format(output_file))
 
 
 if __name__ == "__main__":
@@ -168,10 +112,8 @@ if __name__ == "__main__":
             help="size of sliding window")
     parser.add_argument("--batch_size", default=256, type=int,
             help="training batch size")
-    parser.add_argument("--max_epochs", default=60, type=int,
+    parser.add_argument("--max_epochs", default=75, type=int,
             help="maximum number of training epoches")
-    parser.add_argument("--n_folds", default=3, type=int,
-            help="training batch size")
     parser.add_argument("--rand_seed", default=11, type=int,
             help="random seed for reproducibility")
     parser.add_argument("--verbose", default=0, type=int,
