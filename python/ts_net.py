@@ -258,7 +258,8 @@ class TsNet:
                 logger.info("Updating theta ...")
                 logger.info("\tBefore update: theta={}, scale_weights={}".format(
                     self.theta, self.scale_weights))
-                log_likelihood = np.zeros_like(self.theta)
+
+                neg_log_ll = np.zeros_like(self.theta)
                 for s, scale in enumerate(self.scales):
                     probs = np.zeros(ll_test.size)
                     for i in xrange(ll_test.size):
@@ -272,10 +273,17 @@ class TsNet:
                     if np.any(probs==0):
                         logger.info("Found 0 probability in probs!")
                         probs[probs==0] = 1e-8
-                    log_likelihood[s] = np.mean(np.log(probs))
-                exp_theta = np.exp(self.theta)
-                y_s = exp_theta / exp_theta.sum()
-                self.theta += log_likelihood * y_s * (1-y_s) / T
+                    neg_log_ll[s] = -1.0 * np.mean(np.log(probs))
+
+                logger.info("neg_log_ll={}".format(neg_log_ll))
+                scale_prob = np.expand_dims(self.scale_weights, axis=-1)
+#                logger.info("scale_prob.shape={}".format(scale_prob.shape))
+                scale_jacob = -1.0 * scale_prob.dot(scale_prob.T)
+#                logger.info("scale_jacob.shape={}".format(scale_jacob.shape))
+                np.fill_diagonal(scale_jacob,
+                        self.scale_weights * (1.0 - self.scale_weights))
+                grad_theta = 1.0 / T * scale_jacob.dot(neg_log_ll)
+                self.theta -= grad_theta
                 logger.info("\tAfter update: theta={}, scale_weights={}".format(
                     self.theta, self.scale_weights))
 
