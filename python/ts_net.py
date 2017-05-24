@@ -263,12 +263,25 @@ class TsNet:
                     self.theta, self.scale_weights))
 
                 neg_log_ll = np.zeros_like(self.theta)
+                g_losses = np.zeros_like(self.theta)
                 for s, scale in enumerate(self.scales):
+                    var_mx = None
                     probs = np.zeros(ll_test.size)
                     for i in xrange(ll_test.size):
                         batch_data = util.reshape(dd_test[i], self.win_size, scale)
                         preds_per_ts = self.model.predict_on_batch([batch_data])
                         probs[i] = preds_per_ts[-1].mean()
+                        if ll_test[i]==1:
+                            flat_gram = np.copy(preds_per_ts[0])
+                            if var_mx is None:
+                                var_mx = flat_gram 
+                            else:
+                                var_mx = np.append(var_mx, flat_gram, axis=0)
+#                            logger.info("var_mx.shape={}".format(var_mx.shape))
+
+                    if var_mx is not None:
+                        g_losses[s] = np.var(var_mx, axis=0).mean()
+
                     neg_mask = ll_test==0
                     probs[neg_mask] = 1-probs[neg_mask]
                     # although sigmoid should not be 0, numerically it can
@@ -285,7 +298,7 @@ class TsNet:
 #                logger.info("scale_jacob.shape={}".format(scale_jacob.shape))
                 np.fill_diagonal(scale_jacob,
                         self.scale_weights * (1.0 - self.scale_weights))
-                grad_theta = 1.0 / T * scale_jacob.dot(neg_log_ll)
+                grad_theta = 1.0 / T * scale_jacob.dot(neg_log_ll + self.corr_reg * g_losses)
                 self.theta -= grad_theta
                 logger.info("\tAfter update: theta={}, scale_weights={}".format(
                     self.theta, self.scale_weights))
@@ -321,7 +334,8 @@ class TsNet:
         for i, f in enumerate(test_data_files):
             test_data, _ = util.load_data(
                     os.path.join(self.test_data_dir, f),
-                    "test", self.downsample)
+                    "test", 0)
+#                    "test", self.downsample)
             for j, scale in enumerate(self.scales):
                 batch_data = util.reshape(test_data,
                         self.win_size, scale)

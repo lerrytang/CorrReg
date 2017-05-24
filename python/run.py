@@ -113,7 +113,7 @@ if __name__ == "__main__":
             help="size of sliding window")
     parser.add_argument("--batch_size", default=256, type=int,
             help="training batch size")
-    parser.add_argument("--max_epochs", default=75, type=int,
+    parser.add_argument("--max_epochs", default=60, type=int,
             help="maximum number of training epoches")
     parser.add_argument("--rand_seed", default=11, type=int,
             help="random seed for reproducibility")
