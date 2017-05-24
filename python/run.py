@@ -26,7 +26,8 @@ def main(args):
     target_data_dir = os.path.join(args.data_dir, args.target_obj)
     logger.info("target_data_dir={}".format(target_data_dir))
     data, labels, pos_ix, neg_ix =\
-            util.load_train_data(target_data_dir, args.downsample)
+            util.load_train_data(target_data_dir, 0)
+#            util.load_train_data(target_data_dir, args.downsample)
     num_seq, seq_len, num_ch = data.shape
     logger.info("num_seq={}, seq_len={}, num_ch={}".format(
         num_seq, seq_len, num_ch))

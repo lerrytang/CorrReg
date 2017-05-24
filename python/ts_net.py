@@ -26,6 +26,7 @@ class TsNet:
 
     def __init__(self, args, train_mean, train_std, num_channel):
         self.reg_coef = args.reg_coef
+        self.downsample = args.downsample
         self.init_lr = args.init_lr
         self.win_size = args.win_size
         self.batch_size = args.batch_size
@@ -43,6 +44,8 @@ class TsNet:
         else:
             self.scales = np.array([1,])
             self.theta = np.array([1.0])
+        if self.downsample > 0:
+            self.scales *= self.downsample
         logger.info("self.scales={}".format(self.scales))
         logger.info("self.theta={}".format(self.theta))
 
