@@ -15,6 +15,10 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+DECAY_STEPS = 2000
+DECAY_RATE = 0.95
+
+
 NUM_SCALES = 4
 T = 0.2
 
@@ -135,10 +139,15 @@ class TsNet:
         logger.info(loss_weights)
         self.model = Model(inputs=[input_data], outputs=outputs)
 
-        optimizer = optimizers.Adam(lr=self.init_lr, decay=1e-5)
+#        optimizer = optimizers.Adam(lr=self.init_lr, decay=1e-5)
+
+        global_step = tf.Variable(0, name="global_step", trainable=False)
+        lr = tf.train.exponential_decay(self.init_lr, global_step,
+                DECAY_STEPS, DECAY_RATE, staircase=True)
+        optimizer = keras.optimizers.TFOptimizer(tf.train.AdamOptimizer(lr))
 
         self.model.compile(optimizer=optimizer,
-                loss=losses, loss_weights=loss_weights)
+                loss=losses, loss_weights=loss_weights, metrics=["acc"])
 
         if logdir is not None:
             from keras.utils import plot_model
@@ -234,9 +243,9 @@ class TsNet:
             self.weights_squared_sum()
 
             # print stats
-            logger.info("Epoch={}, loss={}, prob_loss={}, "\
-                    "corr?loss={}, L2(weights)={}".format(
-                        epoch+1, logs["loss"], logs["prob_loss"],
+            logger.info("Epoch={}, acc={}, loss={}, prob_loss={}, "\
+                    "corr_loss={}, L2(weights)={}".format(
+                        epoch+1, logs["prob_acc"], logs["loss"], logs["prob_loss"],
                         logs["corr_pp_loss"], self.weights_hist[-1]))
 
             # sample train data for testing
@@ -262,7 +271,7 @@ class TsNet:
                     # to prevent log from outputting -Inf, add a tiny amount
                     if np.any(probs==0):
                         logger.info("Found 0 probability in probs!")
-                        probs[probs==0] = 1e-12
+                        probs[probs==0] = 1e-8
                     log_likelihood[s] = np.mean(np.log(probs))
                 exp_theta = np.exp(self.theta)
                 y_s = exp_theta / exp_theta.sum()
