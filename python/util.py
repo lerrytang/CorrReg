@@ -19,10 +19,10 @@ def create_log(log_dir, target_obj):
     modeldir = os.path.join(logdir, "model")
     if not os.path.exists(modeldir):
         os.mkdir(modeldir)
-    return logdir, modeldir
+    return logdir
 
 
-def load_data(filename, datatype, downsample=0):
+def load_data(filename, datatype):
     '''
     Utility for loading .mat files
     '''
@@ -51,19 +51,10 @@ def load_data(filename, datatype, downsample=0):
     data = data[np.argsort(channels)]
     # channel last
     data = np.transpose(data, axes=[1, 0])
-    seq_len, num_ch = data.shape
-    if downsample > 1:
-        data = reshape(data, downsample)
-        logger.debug("data.shape={}".format(data.shape))
-        downsample_mean = np.mean(data, axis=1)
-        logger.debug("downsample_mean.shape={}".format(downsample_mean.shape))
-        downsample_std = np.std(data, axis=1)
-        data = np.concatenate([downsample_mean, downsample_std], axis=-1)
-#    logger.info("sequence_id={}".format(sequence))
     return data, sequence
 
 
-def load_all_data(dirname, datatype, downsample=0):
+def load_all_data(dirname, datatype):
     '''
     Load all data of datatype from a directory
     '''
@@ -80,7 +71,7 @@ def load_all_data(dirname, datatype, downsample=0):
     prev_seq_id = 1
     for idx, datafile in enumerate(datafiles):
         filename = os.path.join(dirname, datafile)
-        data, seq_id = load_data(filename, datatype, downsample)
+        data, seq_id = load_data(filename, datatype)
         if all_data is None:
             seq_len, num_channel = data.shape
             all_data = np.zeros([len(datafiles), seq_len, num_channel],
@@ -99,19 +90,19 @@ def load_all_data(dirname, datatype, downsample=0):
     return all_data, np.asarray(ss_ind), np.asarray(ee_ind)
 
 
-def load_train_data(target_data_dir, downsample):
+def load_train_data(target_data_dir):
     data_files = os.listdir(target_data_dir)
     pre_data_files = np.sort([f for f in data_files if "preictal" in f])
     logger.info("#preictal_files = {}".format(pre_data_files.size))
     int_data_files = np.sort([f for f in data_files if "interictal" in f])
     logger.info("#interictal_files = {}".format(int_data_files.size))
     pre_data, ss_pre_data, ee_pre_data =\
-            load_all_data(target_data_dir, "preictal", downsample)
+            load_all_data(target_data_dir, "preictal")
 #    logger.info("interictal_data.shape={}".format(pre_data.shape))
 #    logger.info("start of independent samples: {}".format(ss_pre_data))
     logger.info("end of independent samples: {}".format(ee_pre_data))
     int_data, ss_int_data, ee_int_data =\
-            load_all_data(target_data_dir, "interictal", downsample)
+            load_all_data(target_data_dir, "interictal")
     ss_int_data += pre_data.shape[0]
     ee_int_data += pre_data.shape[0]
     logger.info("interictal_data.shape={}".format(int_data.shape))

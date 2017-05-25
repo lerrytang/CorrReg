@@ -13,26 +13,7 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger(__name__)
 
 
-def main(args):
-    for arg in vars(args):
-        logger.info("{} = {}".format(arg, getattr(args, arg)))
-
-    if not args.test:
-        logdir, modeldir = util.create_log(args.logdir, args.target_obj)
-    else:
-        logdir = args.logdir
-
-    # load data for training
-    target_data_dir = os.path.join(args.data_dir, args.target_obj)
-    logger.info("target_data_dir={}".format(target_data_dir))
-    data, labels, pos_ix, neg_ix =\
-            util.load_train_data(target_data_dir, 0)
-#            util.load_train_data(target_data_dir, args.downsample)
-    num_seq, seq_len, num_ch = data.shape
-    logger.info("num_seq={}, seq_len={}, num_ch={}".format(
-        num_seq, seq_len, num_ch))
-
-    # calculate mean and std of the dataset
+def get_mean_std(data, args):
     npzdir = os.path.join(args.train_mean_std_dir, args.target_obj)
     npzfile = os.path.join(npzdir, "train_mean_std.npz")
     if os.path.exists(npzfile):
@@ -52,51 +33,92 @@ def main(args):
         os.makedirs(npzdir)
     if not os.path.exists(npzfile):
         np.savez(npzfile, all_mean=all_mean, all_std=all_std)
+    return all_mean, all_std
 
-    # build net
-    logger.info("Build model")
-    train_mean = all_mean.mean(axis=0)
-    train_std = all_std.mean(axis=0)
-    model = TsNet(args, train_mean, train_std, num_ch)
-    model.build_model(logdir=logdir)
+
+def main(args):
+
+    # log parameters for the trial
+    for arg in vars(args):
+        logger.info("{} = {}".format(arg, getattr(args, arg)))
+
+    # define folders
+    if not args.test:
+        logdir = util.create_log(args.logdir, args.target_obj)
+    else:
+        logdir = args.logdir
+    modeldir = os.path.join(logdir, "model")
+
+    # load data
+    target_data_dir = os.path.join(args.data_dir, args.target_obj)
+    logger.info("target_data_dir={}".format(target_data_dir))
+    data, labels, pos_ix, neg_ix =\
+            util.load_train_data(target_data_dir)
+    train_ix, valid_ix = util.split_to_folds(pos_ix, neg_ix, args.n_folds)
+    num_seq, seq_len, num_ch = data.shape
+    logger.info("num_seq={}, seq_len={}, num_ch={}".format(
+        num_seq, seq_len, num_ch))
+
+    # calculate mean and std
+    all_mean, all_std = get_mean_std(data, args)
+
+    # CV
+    for fold_id in xrange(args.n_folds):
+        logger.info("fold: {}".format(fold_id))
+
+        # split data
+        train_indice = train_ix[fold_id]
+        valid_indice = valid_ix[fold_id]
+        logger.info("train_ix={}".format(train_indice))
+        logger.info("valid_ix={}".format(valid_indice))
+        logger.info("train: #pos={}, #neg={}, %pos={}".format(
+            labels[train_indice].sum(),
+            train_indice.size - labels[train_indice].sum(),
+            labels[train_indice].mean()))
+        logger.info("valid: #pos={}, #neg={}, %pos={}".format(
+            labels[valid_indice].sum(),
+            valid_indice.size - labels[valid_indice].sum(),
+            labels[valid_indice].mean()))
+
+        # build net
+        logger.info("Build model")
+        train_mean = all_mean[train_indice].mean(axis=0)
+        train_std = all_std[train_indice].mean(axis=0)
+        model = TsNet(args, train_mean, train_std, num_ch)
+        model.build_model(logdir=logdir if fold_id==0 else None)
     
-#    modeldir = os.path.join(logdir, "model")
-#    modelpath = os.path.join(modeldir, "model_{}.h5".format(args.max_epochs))
-#    if args.multiscale:
-#        thetapath = os.path.join(modeldir, "theta_{}.npz".format(args.max_epochs))
-#    else:
-#        thetapath = None
-
-    # train
-#    if not args.test:
-#        train_hist = model.train(data, labels, logdir,
-#                modelpath, thetapath, args.verbose)
-#        # log training history
-#        hist_file = os.path.join(logdir, "hist_{}.pkl".format(args.max_epochs))
-#        with open(hist_file, "wb") as f:
-#            pickle.dump(train_hist.history, f)
-    checkpoints, train_hist = model.train(data, labels, logdir,args.verbose)
-    # log training history
-    hist_file = os.path.join(logdir, "hist_{}.pkl".format(args.max_epochs))
-    with open(hist_file, "wb") as f:
-        pickle.dump(train_hist.history, f)
+        modelpath = os.path.join(modeldir, "model_{}.h5".format(fold_id))
+        if args.multiscale:
+            thetapath = os.path.join(modeldir, "theta_{}.npz".format(fold_id))
+        else:
+            thetapath = None
     
-    # test
-    data_files = os.listdir(target_data_dir)
-    test_data_files = np.sort([f for f in data_files if "test" in f])
-    logger.info("#test_files = {}".format(test_data_files.size))
+        # train
+        if not args.test:
+            train_hist = model.train(
+                    data[train_indice], labels[train_indice],
+                    data[valid_indice], labels[valid_indice],
+                    logdir, modelpath, thetapath, args.verbose)
+            hist_file = os.path.join(logdir, "hist_{}.pkl".format(fold_id))
+            with open(hist_file, "wb") as f:
+                pickle.dump(train_hist.history, f)
 
-    for i, (modelpath, thetapath) in enumerate(checkpoints):
-        logger.info("modelpath={}, thetapath={}".format(modelpath, thetapath))
+        # test
+        data_files = os.listdir(target_data_dir)
+        test_data_files = np.sort([f for f in data_files if "test" in f])
+        logger.info("#test_files = {}".format(test_data_files.size))
+
+        logger.info("modelpath={}".format(modelpath))
         model.model.load_weights(modelpath)
         if args.multiscale:
+            logger.info("thetapath={}".format(thetapath))
             theta_file = np.load(thetapath)
             model.model.theta = theta_file["theta"]
             logger.info("model.model.theta={}".format(model.model.theta))
         preds = model.test_on_data(test_data_files)
         output = pd.Series(preds, index=test_data_files)
         output_file = os.path.join(logdir,
-                "{}_preds{}.csv".format(args.target_obj, i))
+                "{}_preds{}.csv".format(args.target_obj, fold_id))
         output.to_csv(output_file)
         logger.info("Test result written to {}.".format(output_file))
 
@@ -115,13 +137,15 @@ if __name__ == "__main__":
             help="directory to store logs")
     parser.add_argument("--corr_reg", default=0.0, type=float,
             help="coefficient for CorrReg")
+    parser.add_argument("--n_folds", default=3, type=int,
+            help="number of CV folds")
     parser.add_argument("--downsample", default=0, type=int,
             help="ratio to downsample data")
     parser.add_argument("--win_size", default=4000, type=int,
             help="size of sliding window")
     parser.add_argument("--batch_size", default=256, type=int,
             help="training batch size")
-    parser.add_argument("--max_epochs", default=100, type=int,
+    parser.add_argument("--max_epochs", default=150, type=int,
             help="maximum number of training epoches")
     parser.add_argument("--rand_seed", default=11, type=int,
             help="random seed for reproducibility")
