@@ -13,6 +13,21 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger(__name__)
 
 
+def merge_results(logdir, tar_obj):
+    prefix = "{}_preds".format(tar_obj)
+    output_files = [f for f in os.listdir(logdir) if prefix in f]
+    res = None
+    for f in output_files:
+        tmp = pd.read_csv(os.path.join(logdir, f), index_col=0, header=None)
+        if res is None:
+            res = tmp
+        else:
+            res = res + tmp
+    res /= len(output_files)
+    res.to_csv(os.path.join(logdir, "submit_{}.csv".format(tar_obj)), header=False)
+    return res
+
+
 def get_mean_std(data, args):
     npzdir = os.path.join(args.train_mean_std_dir, args.target_obj)
     npzfile = os.path.join(npzdir, "train_mean_std.npz")
@@ -122,6 +137,8 @@ def main(args):
                 "{}_preds{}.csv".format(args.target_obj, fold_id))
         output.to_csv(output_file)
         logger.info("Test result written to {}.".format(output_file))
+
+    merge_results(logdir, args.target_obj)
 
 
 if __name__ == "__main__":
