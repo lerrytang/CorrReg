@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 DECAY_STEPS = 2000
 DECAY_RATE = 0.95
 
+SAVE_EVERY_EPOCH = 20
 
 NUM_SCALES = 4
 T = 0.2
@@ -233,12 +234,14 @@ class TsNet:
                     else:
                         yield([batch_data], batch_mask+[batch_label])
 
-    def train(self, train_data, train_label, logdir,
-            modelpath=None, thetapath=None, verbose=0):
+    def train(self, train_data, train_label, logdir, verbose=0):
+#            modelpath=None, thetapath=None, verbose=0):
 
         steps_per_epoch = 200
         logger.info("max_epochs={}, steps_per_epoch={}".format(
                     self.max_epochs, steps_per_epoch))
+
+        self.checkpoints = []
 
         def update_theta(epoch, logs):
 
@@ -250,6 +253,18 @@ class TsNet:
                     "corr_loss={}, L2(weights)={}".format(
                         epoch+1, logs["prob_acc"], logs["loss"], logs["prob_loss"],
                         logs["corr_pp_loss"], self.weights_hist[-1]))
+
+            # save snapshot
+            if (epoch+1) % SAVE_EVERY_EPOCH == 0:
+                modelpath = os.path.join(logdir, "model",
+                        "checkpoint_{}.h5".format(epoch+1))
+                thetapath = os.path.join(logdir, "model",
+                        "theta_{}.npz".format(epoch+1))
+                logger.info("Saving checkpoint to {} ...".format(modelpath))
+                self.model.save_weights(modelpath)
+                logger.info("Saving theta to {} ...".format(thetapath))
+                np.savez(thetapath, theta=self.theta)
+                self.checkpoints.append((modelpath, thetapath))
 
             # sample train data for testing
             if self.multiscale:
@@ -316,15 +331,15 @@ class TsNet:
             epochs=self.max_epochs
             )
 
-        logger.info("Saving model ...")
-        self.model.save_weights(modelpath)
-        if thetapath is not None:
-            logger.info("Saving theta to {}".format(thetapath))
-            np.savez(thetapath, theta=self.theta)
-        logger.info("Model saved.")
+#        logger.info("Saving model ...")
+#        self.model.save_weights(modelpath)
+#        if thetapath is not None:
+#            logger.info("Saving theta to {}".format(thetapath))
+#            np.savez(thetapath, theta=self.theta)
+#        logger.info("Model saved.")
 
         train_hist.history["weights_squared_sum"] = self.weights_hist
-        return train_hist
+        return self.checkpoints, train_hist
 
     def test_on_data(self, test_data_files):
         """Test model performance on the test set"""

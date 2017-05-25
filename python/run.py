@@ -60,37 +60,45 @@ def main(args):
     model = TsNet(args, train_mean, train_std, num_ch)
     model.build_model(logdir=logdir)
     
-    modeldir = os.path.join(logdir, "model")
-    modelpath = os.path.join(modeldir, "model_{}.h5".format(args.max_epochs))
-    if args.multiscale:
-        thetapath = os.path.join(modeldir, "theta_{}.npz".format(args.max_epochs))
-    else:
-        thetapath = None
+#    modeldir = os.path.join(logdir, "model")
+#    modelpath = os.path.join(modeldir, "model_{}.h5".format(args.max_epochs))
+#    if args.multiscale:
+#        thetapath = os.path.join(modeldir, "theta_{}.npz".format(args.max_epochs))
+#    else:
+#        thetapath = None
 
     # train
-    if not args.test:
-        train_hist = model.train(data, labels, logdir,
-                modelpath, thetapath, args.verbose)
-        # log training history
-        hist_file = os.path.join(logdir, "hist_{}.pkl".format(args.max_epochs))
-        with open(hist_file, "wb") as f:
-            pickle.dump(train_hist.history, f)
+#    if not args.test:
+#        train_hist = model.train(data, labels, logdir,
+#                modelpath, thetapath, args.verbose)
+#        # log training history
+#        hist_file = os.path.join(logdir, "hist_{}.pkl".format(args.max_epochs))
+#        with open(hist_file, "wb") as f:
+#            pickle.dump(train_hist.history, f)
+    checkpoints, train_hist = model.train(data, labels, logdir,args.verbose)
+    # log training history
+    hist_file = os.path.join(logdir, "hist_{}.pkl".format(args.max_epochs))
+    with open(hist_file, "wb") as f:
+        pickle.dump(train_hist.history, f)
     
     # test
     data_files = os.listdir(target_data_dir)
     test_data_files = np.sort([f for f in data_files if "test" in f])
     logger.info("#test_files = {}".format(test_data_files.size))
-    logger.info("Loading {} to test ...".format(modelpath))
-    model.model.load_weights(modelpath)
-    if args.multiscale:
-        theta_file = np.load(thetapath)
-        model.model.theta = theta_file["theta"]
-        logger.info("model.model.theta={}".format(model.model.theta))
-    preds = model.test_on_data(test_data_files)
-    output = pd.Series(preds, index=test_data_files)
-    output_file = os.path.join(logdir, "{}_preds.csv".format(args.target_obj))
-    output.to_csv(output_file)
-    logger.info("Test result written to {}.".format(output_file))
+
+    for i, (modelpath, thetapath) in enumerate(checkpoints):
+        logger.info("modelpath={}, thetapath={}".format(modelpath, thetapath))
+        model.model.load_weights(modelpath)
+        if args.multiscale:
+            theta_file = np.load(thetapath)
+            model.model.theta = theta_file["theta"]
+            logger.info("model.model.theta={}".format(model.model.theta))
+        preds = model.test_on_data(test_data_files)
+        output = pd.Series(preds, index=test_data_files)
+        output_file = os.path.join(logdir,
+                "{}_preds{}.csv".format(args.target_obj, i))
+        output.to_csv(output_file)
+        logger.info("Test result written to {}.".format(output_file))
 
 
 if __name__ == "__main__":
@@ -113,7 +121,7 @@ if __name__ == "__main__":
             help="size of sliding window")
     parser.add_argument("--batch_size", default=256, type=int,
             help="training batch size")
-    parser.add_argument("--max_epochs", default=60, type=int,
+    parser.add_argument("--max_epochs", default=100, type=int,
             help="maximum number of training epoches")
     parser.add_argument("--rand_seed", default=11, type=int,
             help="random seed for reproducibility")
