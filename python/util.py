@@ -115,40 +115,49 @@ def load_train_data(target_data_dir):
     return data, labels, (ss_pre_data, ee_pre_data), (ss_int_data, ee_int_data)
 
 
-def split_to_folds(pos_ix, neg_ix, n_folds=2):
-    ss_pos, ee_pos = pos_ix
-    logger.info("ss_pos={}".format(ss_pos))
-    logger.info("ee_pos={}".format(ee_pos))
-    ss_neg, ee_neg = neg_ix
-    labels = [1]*ss_pos.size + [0]*ss_neg.size
-    ss_ix = np.concatenate([ss_pos, ss_neg])
-    ee_ix = np.concatenate([ee_pos, ee_neg])
-    assert len(labels)==ss_ix.size==ee_ix.size
-
+def split_to_folds(labels, n_folds=3):
     train_sets = []
     valid_sets = []
     skf = StratifiedKFold(labels, n_folds, shuffle=True)
     for train_ix, valid_ix in skf:
-        train_ss = ss_ix[train_ix]
-        train_ee = ee_ix[train_ix]
-        expanded_train_ix = []
-        for i in range(train_ss.size):
-            expanded_train_ix.extend(np.arange(train_ss[i], train_ee[i]+1).tolist())
-        expanded_train_ix = np.array(expanded_train_ix)
-#        logger.info("expanded_train_ix={}".format(expanded_train_ix))
-
-        valid_ss = ss_ix[valid_ix]
-        valid_ee = ee_ix[valid_ix]
-        expanded_valid_ix = []
-        for i in range(valid_ss.size):
-            expanded_valid_ix.extend(np.arange(valid_ss[i], valid_ee[i]+1).tolist())
-        expanded_valid_ix = np.array(expanded_valid_ix)
-#        logger.info("expanded_valid_ix={}".format(expanded_valid_ix))
-
-        train_sets.append(expanded_train_ix)
-        valid_sets.append(expanded_valid_ix)
-
+        train_sets.append(train_ix)
+        valid_sets.append(valid_ix)
     return train_sets, valid_sets
+
+#def split_to_folds(pos_ix, neg_ix, n_folds=2):
+#    ss_pos, ee_pos = pos_ix
+#    logger.info("ss_pos={}".format(ss_pos))
+#    logger.info("ee_pos={}".format(ee_pos))
+#    ss_neg, ee_neg = neg_ix
+#    labels = [1]*ss_pos.size + [0]*ss_neg.size
+#    ss_ix = np.concatenate([ss_pos, ss_neg])
+#    ee_ix = np.concatenate([ee_pos, ee_neg])
+#    assert len(labels)==ss_ix.size==ee_ix.size
+#
+#    train_sets = []
+#    valid_sets = []
+#    skf = StratifiedKFold(labels, n_folds, shuffle=True)
+#    for train_ix, valid_ix in skf:
+#        train_ss = ss_ix[train_ix]
+#        train_ee = ee_ix[train_ix]
+#        expanded_train_ix = []
+#        for i in range(train_ss.size):
+#            expanded_train_ix.extend(np.arange(train_ss[i], train_ee[i]+1).tolist())
+#        expanded_train_ix = np.array(expanded_train_ix)
+##        logger.info("expanded_train_ix={}".format(expanded_train_ix))
+#
+#        valid_ss = ss_ix[valid_ix]
+#        valid_ee = ee_ix[valid_ix]
+#        expanded_valid_ix = []
+#        for i in range(valid_ss.size):
+#            expanded_valid_ix.extend(np.arange(valid_ss[i], valid_ee[i]+1).tolist())
+#        expanded_valid_ix = np.array(expanded_valid_ix)
+##        logger.info("expanded_valid_ix={}".format(expanded_valid_ix))
+#
+#        train_sets.append(expanded_train_ix)
+#        valid_sets.append(expanded_valid_ix)
+#
+#    return train_sets, valid_sets
 
 
 def reshape(data, win_size, skip=1):

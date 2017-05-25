@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 DECAY_STEPS = 2000
 DECAY_RATE = 0.95
 
-PATIENCE = 10
+PATIENCE = 30
 
 NUM_SCALES = 4
 T = 0.2

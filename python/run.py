@@ -54,7 +54,8 @@ def main(args):
     logger.info("target_data_dir={}".format(target_data_dir))
     data, labels, pos_ix, neg_ix =\
             util.load_train_data(target_data_dir)
-    train_ix, valid_ix = util.split_to_folds(pos_ix, neg_ix, args.n_folds)
+#    train_ix, valid_ix = util.split_to_folds(pos_ix, neg_ix, args.n_folds)
+    train_ix, valid_ix = util.split_to_folds(labels, args.n_folds)
     num_seq, seq_len, num_ch = data.shape
     logger.info("num_seq={}, seq_len={}, num_ch={}".format(
         num_seq, seq_len, num_ch))
